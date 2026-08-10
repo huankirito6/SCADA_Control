@@ -2,11 +2,11 @@
 
 ## Status
 
-**FIX ROUND 1 VERIFIED — PENDING COMMIT**
+**FIX ROUND 1 VERIFIED AND COMMITTED (`HEAD`)**
 
 > Các kết luận semantic của round ban đầu dưới đây là evidence lịch sử của commit `cdfec02b`, không còn được dùng làm completion claim. Phần `## Fix round 1` ghi validator/checklist semantic và evidence thay thế.
 
-## Commit
+## Baseline commit (round ban đầu)
 
 - SHA: `cdfec02bd7f7f39cf9ef14c0740694bdba9b9530`
 - Message: `docs: close SCADA architecture blockers`
