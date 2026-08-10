@@ -1,8 +1,8 @@
 # Nền tảng SCADA/HMI trên Web — Thiết kế kiến trúc
 
 **Ngày:** 2026-08-04
-**Trạng thái:** Design — chờ duyệt trước khi lập kế hoạch triển khai
-**Bối cảnh:** Nghiên cứu & phát triển, hướng tới startup. Một người phát triển, part-time (~0.4 FTE).
+**Trạng thái:** Approved architecture baseline — các quyết định P0 được khóa bởi ADR 0001–0006
+**Bối cảnh:** Nghiên cứu & phát triển, hướng tới startup. Thứ tự triển khai chuẩn nằm trong kế hoạch risk-first được dẫn chiếu tại §15.
 
 ---
 
@@ -122,18 +122,13 @@ Không phải để scale. Ba lý do đều là an ninh và vận hành:
 2. **Vòng đời độc lập.** Restart Web để deploy UI không được làm gián đoạn scan hay mất buffer store-and-forward.
 3. **Không cùng lịch trình lỗi.** Một truy vấn trend nặng hay memory leak trong UI không được làm jitter chu kỳ scan.
 
-### 4.3. Boundary bây giờ, process split sau
+### 4.3. Process boundary là gate trước hardware
 
-Boundary được định nghĩa bằng **interface C#** và thực thi **in-process** trong các slice đầu. gRPC thay vào sau, không đổi call site.
+Production luôn chạy **hai process/service identity riêng**. In-process adapter chỉ được dùng trong unit/integration test hoặc simulator read-only khi route OT bị chặn; nó không phải deployment mode. Trước mọi kết nối hardware thật — kể cả read-only — startup phải fail nếu chưa chứng minh được service identity riêng, ACL peer, route mạng, IPC authentication và deployment closure. `Scada.Web` không được chứa driver assembly, device credential hoặc route tới control network.
 
-Đây là điểm hai agent rà soát đánh dấu là mùi over-engineering (hai implementation cho một contract khi chưa có user nào). Tôi giữ, với hai điều kiện làm nó không thành nợ:
+Application port độc lập transport; wire/protobuf contract có version riêng. Production dùng authenticated local IPC: named pipe + SID/peer-process checks trên Windows, UDS + peer credential trên Linux/Docker, hoặc mTLS cho TCP fallback. Policy backpressure nằm trên transport và DTO qua boundary là immutable. Gate và threat model chi tiết được khóa tại [ADR-0001](../../adr/0001-process-and-ipc-boundary.md).
 
-- **Policy nằm TRÊN transport**, không nằm trong implementation. Hai implementation có hành vi khác nhau dưới tải — gRPC HTTP/2 flow control sẽ *block*, còn `Channel<T>` in-process sẽ *drop*. Nếu policy backpressure nằm trong implementation thì hai bản chạy khác nhau và test in-process không nói gì về production.
-- **Mọi DTO qua boundary là immutable, và implementation in-process phải copy.** Trả reference vào cache nội bộ của Runtime là con đường ngắn nhất tới một bug không debug được.
-
-Nếu tới slice cuối vẫn chưa có nhu cầu tách process thật, xoá bản gRPC — không giữ code không dùng để "cho tương lai".
-
-### 4.4. Quyền sở hữu dữ liệu — ba file DB
+### 4.4. Quyền sở hữu dữ liệu — single writer per store
 
 Phát biểu "Runtime là writer duy nhất" là **sai** và đã bị loại. Nó tự chống lại chính nó: lệnh bị RBAC ở Web từ chối không bao giờ tới Runtime, nên audit sẽ mất đúng loại sự kiện quan trọng nhất — nỗ lực ghi bị từ chối.
 
@@ -148,6 +143,7 @@ Nên: **hai chain độc lập, mỗi chain một writer duy nhất, mỗi chain
 | `config.db` | **Web** | Runtime | Mở `query_only=1` |
 | `audit-web.db` | **Web** | — | Chain riêng, `audit verify` kiểm độc lập |
 | `historian.db` + `audit-runtime.db` | **Runtime** | Web | **Không mở file.** Query qua RPC |
+| `alarms.db` | **Runtime** | Web | **Không mở file.** Snapshot/cursor/query qua RPC |
 
 `audit verify` (§9.2) verify **từng chain riêng** rồi trình bày hợp nhất theo thời gian. Không có chain thứ ba nào "gộp" hai chain — gộp nghĩa là có một writer thứ ba, tức là quay lại đúng vấn đề vừa loại.
 
@@ -197,24 +193,24 @@ Kiểm tra cụ thể: nếu một thay đổi trong schema SQLite buộc phải
 
 Lý do quyết định — mục tiêu 5. Một audit record dạng *"operator X đã ghi giá trị 1 vào `Site/A1/L2/M3/Speed` lúc T"* trở thành **sai sự thật** nếu path đó sau này được đổi tên hoặc chuyển sang máy khác. Audit phải vừa **bất biến** vừa **giải được**, và không thể xây cả hai trên một chuỗi có thể sửa. Đổi tên là chuyện xảy ra liên tục lúc commissioning, nên đây không phải trường hợp góc.
 
-Chọn int64 thay vì ULID/GUID: mọi hàng historian đều mang khoá này, và đây là bảng lớn nhất trong hệ thống. 8 byte so với 16–26 byte, và index cluster tốt hơn. Hệ thống có **một** writer nên không cần khoá phân tán. "ULID hay int64, quyết sau" là nợ chưa trả — trả bây giờ.
+Chọn int64 thay vì ULID/GUID: mọi hàng historian đều mang khoá này, và đây là bảng lớn nhất trong hệ thống. 8 byte so với 16–26 byte, và index cluster tốt hơn. Hệ thống có **một** writer nên không cần khoá phân tán. Quyết định int64 đã khóa từ baseline này.
 
 `former_paths` được lưu để giải path lịch sử, với hai luật: mỗi bản ghi **bắt buộc** có `validUntil`, và khi một path bị đổi tên rồi tái sử dụng cho tag khác thì **path hiện tại thắng**. Không có hai luật này, tra cứu path lịch sử trả về sai tag.
 
 Tag bị bỏ khỏi cấu hình phải được **retire**, không bao giờ delete — historian còn tham chiếu tới nó.
 
-### 5.2. Quality là bitfield, không phải enum phẳng
+### 5.2. Quality domain tách severity và reason flags
 
-Quality dùng bitfield kiểu OPC UA **từ hàng dữ liệu đầu tiên**. Enum phẳng (`Good/Bad/Uncertain`) sẽ đủ trong ba tháng rồi buộc phải migrate **bảng lớn nhất trong hệ thống** khi cần phân biệt "bad vì comm fail" với "bad vì device báo lỗi" với "uncertain vì giá trị được hold".
+Quality không dùng ordinal packing để làm phép OR. Domain và wire đều biểu diễn độc lập:
 
+```text
+severity: Good | Uncertain | Bad
+reasonFlags: CommFail | DeviceError | ConfigError | Stale |
+             LastKnownValue | OutOfRange | NotInitialized | Simulated | Forced
+nativeStatus: optional protocol status
 ```
-bit 0-1   severity   Good | Uncertain | Bad
-bit 2-7   reason     CommFail | DeviceError | ConfigError | Stale |
-                     LastKnownValue | OutOfRange | NotInitialized | Simulated | Forced
-bit 8-15  reserved
-```
 
-**Quality không phải một giá trị và không bao giờ được coerce.** Xem §7.4 — đây là luật an toàn quan trọng nhất trong tài liệu.
+`reasonFlags` là flags độc lập; `severity` là enum có thứ tự để tính `worstSeverity`. Trend bucket trả `severitySeenMask`, `worstSeverity`, `reasonFlagsSeen`, `durGoodMs`, `durValidMs`, `durBadMs`, `durStaleMs`; tuyệt đối không OR raw packed quality. **Quality không bao giờ được coerce.** Xem §7.4 và [ADR-0002](../../adr/0002-quality-and-time-model.md).
 
 ### 5.3. Model tag
 
@@ -294,17 +290,17 @@ Modbus RTU nằm trong phạm vi và **không** bị bỏ. Nó là giao thức p
 
 ## 7. Dữ liệu real-time và lịch sử
 
-### 7.1. Telemetry lossy, historian và audit lossless
+### 7.1. Telemetry hội tụ; historian không mất dữ liệu im lặng
 
 Đây là hai khái niệm khác nhau và tôi đã từng nhập chúng làm một, tạo ra một tiêu chí nghiệm thu bất khả thi ("resync không hở sequence" trên kênh đã tuyên bố lossy).
 
 | Kênh | Bảo đảm | Cách kiểm |
 |---|---|---|
 | Telemetry → browser | **Convergence**: sau resync, client hiển thị giá trị hiện tại đúng trong ≤ **2.000 ms** | So snapshot sau resync |
-| Historian | Không trùng, không hở | `QueryTrend` sau test tải |
+| Historian | **No-silent-loss** sau acceptance; retry không trùng | Ingest identity + gap/high-water marker + `QueryTrend` sau test tải |
 | Audit + command journal | Lossless, append-only, fail-closed | `audit verify` (§9.2) |
 
-Cơ chế của telemetry là **epoch per frame**, không phải sequence per sample.
+Cơ chế của telemetry là `subscriptionGeneration + epoch + snapshotWatermark`, không phải sequence per sample. Snapshot được chụp tại watermark `W`; mailbox per-client được serialize và chỉ áp delta `> W`. Mailbox là dirty-map latest-wins. Khi không thể coalesce, server phát `ResyncRequired`; client bỏ queue cũ và đi qua FSM `Bootstrapping → Live → Lagging/Resyncing → Offline`. Chi tiết tại [ADR-0006](../../adr/0006-scene-authority-and-telemetry-fsm.md).
 
 ### 7.2. Handle epoch — chế độ lỗi tệ nhất trong SCADA
 
@@ -317,6 +313,7 @@ Nên:
 - Mỗi frame mang `epoch`.
 - Snapshot trả kèm bảng `handle → TagId` và epoch tương ứng.
 - Client **drop mọi frame khác epoch hiện tại**, không cố diễn giải.
+- Snapshot mang `subscriptionGeneration`, `epoch`, `snapshotWatermark`; delta chỉ được áp khi cùng generation/epoch và watermark lớn hơn snapshot.
 - **Mọi API historian nhận và trả `TagId`, tuyệt đối không nhận handle.** Handle chỉ sống trong một session telemetry.
 
 ### 7.3. Ghi historian: store-on-change + deadband + heartbeat
@@ -327,7 +324,7 @@ Deadband **vô nghĩa với bool/enum/string** — những kiểu này store-on-
 
 Mỗi tag cần **max store rate** để một tín hiệu nhiễu không tự mình lấp đĩa.
 
-**Heartbeat là ràng buộc bắt buộc của mô hình đọc, không phải tiện lợi.** Không có nó, một tag bool không đổi trong 3 tháng biến truy vấn as-of thành full scan ngược. Điều này liên kết §7.3 với §7.5: heartbeat là thứ bound truy vấn seed.
+**Heartbeat là ràng buộc bắt buộc của mô hình đọc, không phải tiện lợi.** Không có nó, một tag bool giữ nguyên lâu dài biến truy vấn as-of thành full scan ngược. Điều này liên kết §7.3 với §7.5: heartbeat là thứ bound truy vấn seed.
 
 ### 7.4. Quality không bao giờ được coerce — luật an toàn
 
@@ -340,7 +337,15 @@ Kèm hai cơ chế bắt buộc:
 - **`onInvalid` khai báo per-binding** — mỗi binding phải nói rõ nó làm gì khi dữ liệu chết (hatch pattern, dấu ?, giữ giá trị cuối kèm dấu hiệu stale). Không có mặc định im lặng.
 - **Chỉ báo cấp màn hình "N/300 tag invalid"** luôn hiển thị.
 
-Luật, viết ra để không bị lách: **không bao giờ để một màn hình trông bình thường khi dữ liệu của nó đã chết.**
+**Luật, viết ra để không bị lách: không bao giờ để một màn hình trông bình thường khi dữ liệu của nó đã chết.**
+
+Runtime là nguồn duy nhất chuyển tag sang `Stale`, dùng monotonic/logical clock. Mỗi tag published bắt buộc khai báo `StaleAfterMs`; validator bắt buộc:
+
+```text
+max(3 × ScanPeriodMs, 2_000) <= StaleAfterMs <= 60_000
+```
+
+Không có implicit default khi publish. Browser giữ transport state `RuntimeDisconnected` riêng và không sửa domain quality. `Bad`, `Stale`, `NoData`, `RuntimeDisconnected` luôn có pattern + icon/text + age + global invalid count và disable command.
 
 ### 7.5. Mô hình đọc: `QueryTrend`, không phải `QueryRange`
 
@@ -358,15 +363,16 @@ Nên contract là:
 QueryTrend(tagIds, from, to, maxPoints, aggregate)
   → per tag: {
       seed: sample as-of `from`,        // BẮT BUỘC
-      buckets: [{ tsStart, first, last, min, max,
-                  twAvg, durGoodMs, durTotalMs, qMask }]
+      buckets: [{ tsStart, first, last, min, max, twAvg,
+                  durGoodMs, durValidMs, durBadMs, durStaleMs,
+                  severitySeenMask, worstSeverity, reasonFlagsSeen }]
     }
 ```
 
 - **Seed as-of là bắt buộc.** Không có nó, mọi series bắt đầu bằng một khoảng trống giả ở cạnh trái — người dùng thấy "không có dữ liệu" trong khi dữ liệu vẫn ổn, chỉ là sample cuối nằm trước `from`.
 - Truy vấn seed: 300 seek dùng prepared statement tái sử dụng, bound bằng `ts_us >= from − 2 × heartbeat`. **Heartbeat là thứ làm cái bound này khả thi.**
 - Aggregate phải **phân rã được**: lưu `tw_sum` + `dur_good_ms`, **không bao giờ** lưu avg đã tính. Avg đã tính không roll-up được.
-- `qMask` là **OR bitmask** của quality trong bucket.
+- Aggregate quality dùng `severitySeenMask`, `worstSeverity` và `reasonFlagsSeen`; không có `qMask` là OR của raw quality.
 
 ### 7.6. Thời gian là một subsystem
 
@@ -393,7 +399,9 @@ CREATE TABLE sample (
   val     REAL,        -- giới hạn 2^53
   val_i   INTEGER,     -- counter 64-bit
   val_s   TEXT,
-  q       INTEGER NOT NULL,
+  q_severity INTEGER NOT NULL,
+  q_reasons  INTEGER NOT NULL,
+  native_status INTEGER,
   PRIMARY KEY (tag_id, ts_us)
 ) STRICT, WITHOUT ROWID;
 ```
@@ -417,7 +425,7 @@ SQLite không có partition. Làm partition ở **tầng repository**: một fil
 
 ## 8. Cấu hình, publish, và lệnh
 
-### 8.1. Config là version bất biến
+### 8.1. Config là version bất biến; activation là state machine
 
 Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** kèm **canonical hash**. Runtime **pull** version, không nhận push.
 
@@ -427,11 +435,15 @@ Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **b�
 
 **`ReloadConfig` không được là điểm đơn nhất.** Web publish rồi crash trước khi gọi được → Runtime kẹt ở version cũ vĩnh viễn. Nên Runtime **cũng poll** một con trỏ `latest_published_version` một hàng. RPC là đường nhanh; poll là đường đúng.
 
-**Mốc kích hoạt ở mức tag, không mức version.** `config_activation(version)` với PK = version **vỡ ngay khi rollback** — republish version N−1 là kích hoạt nó lần thứ hai. Cần `activation_id` surrogate. Và mức version tạo mốc giả: thêm một màn hình HMI cũng sinh mốc "cấu hình đã đổi" trên mọi trend, UI đầy cảnh báo vô nghĩa, và người dùng học cách ngó lơ cảnh báo — bao gồm cả cảnh báo thật.
+Minimal immutable config/publish/activation thuộc **foundation**, trước scan-budget validation và trước mọi hardware. Mỗi activation có `activation_id` riêng và state `Desired → Validating → Preparing → Active | ActiveDegraded | Rejected`. Schema/hash/physical-envelope validation là all-or-nothing trước atomic active-pointer switch; lỗi connectivity không làm config invalid mà tạo `ActiveDegraded` cùng `tag_load_status` per resource. RPC reload là fast path, poll con trỏ published là correctness path.
+
+**Mốc kích hoạt ở mức tag, không mức version.** `config_activation(version)` với PK = version vỡ khi rollback; `activation_id` là surrogate bất biến và có thể kích hoạt lại version cũ. Mốc semantic trên trend vẫn là `tag_semantic_revision` để tránh tạo mốc giả cho thay đổi scene.
 
 Đúng: `tag_semantic_revision(tag_id, semantic_hash, from_ts_us)` với hash **chỉ trên các field đổi nghĩa** — `dataType`, `byteOrder`, `wordOrder`, `scaling`, `unit`. **Không** gồm `deadband`, `description`, `path`.
 
 **Runtime re-validate khi load, không tin validate của Web.** Xem §9.3 — đây là điều kiện an ninh, không phải phòng thủ chiều sâu cho vui.
+
+Contract activation đầy đủ được khóa tại [ADR-0003](../../adr/0003-config-activation.md).
 
 ### 8.2. Reconciliation dựa trên resource
 
@@ -457,7 +469,11 @@ UI đọc một **projection** của chuỗi này. Projection có thể rebuild;
 
 **Audit ghi thất bại ⇒ REJECT lệnh (fail-closed).** Đĩa đầy mà vẫn cho ghi PLC là đúng thứ sẽ bị chất vấn trong một cuộc điều tra sự cố, và không có câu trả lời tốt.
 
-Pre-write check (ở Runtime, không ở Web): tag tồn tại và không retired · `writeable=true` trong version đang chạy · **và** được write policy envelope cho phép (§9.3) · người dùng có quyền trên area · giá trị trong range · rate limit chưa vượt · connection Online · quality không Bad · một write outstanding mỗi thiết bị · idempotency key chưa dùng · giá trị đúng kiểu · **absolute set-value, không phải toggle/increment** (§8.5).
+Mọi command mang `command_id`, `activation_id`, `active_config_hash`, `tag_id`, `source_binding_hash`, `value_meaning_hash`, `physical_target_digest`, expected value/sample revision, quality, observed timestamp, device-session generation, subject/capability nonce và requested typed value. Runtime re-check ngay trước durable intent. Scene id/revision/hash chỉ là audit context, không phải authority mặc định. Mismatch trước durable intent là `PreconditionFailed`, yêu cầu confirm lại và không retry.
+
+Capability command là one-time, short-lived, audience/channel-bound và bind subject, exact target/value, activation/hashes, policy version, expiry, nonce. Runtime consume capability nguyên tử cùng authorization và immutable physical target + `DispatchIntent` trong durable transaction dùng command/audit durability. **Chỉ sau commit mới gọi driver.** Attempt/readback/outcome được append sau I/O; restart thấy intent chưa có outcome project thành `INDETERMINATE` và tuyệt đối không auto-dispatch lại.
+
+Pre-write check (ở Runtime, không ở Web): capability hợp lệ/chưa consume · tag tồn tại và không retired · activation/hash/semantic/observation còn hợp lệ · `writeable=true` trong version đang chạy · physical tuple được Runtime policy cho phép (§9.3) · quyền area còn hiệu lực · typed value/range/rate hợp lệ · connection Online · quality/freshness/device generation hợp lệ · một write outstanding mỗi thiết bị · **absolute set-value, không phải toggle/increment** (§8.5). Xem [ADR-0004](../../adr/0004-command-authority-and-durability.md).
 
 ### 8.4. Readback không chứng minh nhân quả — `Verified` vs `Consistent`
 
@@ -499,8 +515,8 @@ Sự thật cần nói ra: **mọi cơ chế truyền định danh chỉ bảo v
 
 Hai cách thu hẹp thật:
 
-- **Runtime phát hành assertion** (không phải Web). Web bị RCE khi đó chỉ **replay** được assertion của user đang online — **không mint** được một admin đang offline. Đây là một thu hẹp thật, không phải trang trí.
-- **Re-auth theo lệnh, verifier nằm ở Runtime.** ~2–3 ngày công, và là control mạnh nhất trên mỗi đơn vị công bỏ ra trong toàn bộ tài liệu.
+- **Runtime phát hành one-time capability** sau khi kiểm authoritative authorization snapshot/revocation hoặc verifier re-auth độc lập. Capability bind exact intent như §8.3; Web không thể đổi subject/target/value/hash/channel hoặc replay nonce.
+- Nếu chưa triển khai authoritative verifier, threat model phải ghi rõ Web RCE có toàn quyền bên trong physical envelope và audit subject không đáng tin; không được mô tả identity propagation như một security boundary.
 
 Audit phải mang **cả hai**: `human_subject` và `assertion_path`. Không có RPC impersonation tổng quát. **Cấm truyền username trong gRPC metadata** — bắt ở code review.
 
@@ -531,9 +547,15 @@ Tài liệu sản phẩm phải viết đúng câu này: **"tamper-evident, khô
 
 Ba sửa chữa, tất cả bắt buộc:
 
-**Write policy envelope do RUNTIME sở hữu.** Một file trên host của Runtime, root-owned, **Web không có quyền ghi**. Đọc lúc khởi động; đổi phải restart. Nội dung: global write kill-switch · danh sách area được phép ghi · max write rate cứng · deny-list tag.
+**Write policy envelope do RUNTIME sở hữu.** Một file signed trên host của Runtime, administrator/root-owned, **Web không có quyền ghi**. Đọc fail-closed lúc khởi động; đổi phải restart và sinh audit/seal event. Nội dung là positive allowlist của tuple vật lý:
 
-**Luật: một config version chỉ được HẸP HƠN envelope, không bao giờ rộng hơn.** ~1 ngày công, và là thứ **duy nhất** khiến "Web bị RCE" ≠ "ghi PLC tuỳ ý".
+```text
+driver + endpoint/device identity + unit/node + function/access mode +
+address + datatype + byte/word order + raw/engineering transform +
+raw/engineering range + write mode + max rate/pulse
+```
+
+**Luật: một config version chỉ được HẸP HƠN tuple đã duyệt, không bao giờ rộng hơn.** Broadcast write và function nguy hiểm bị cấm mặc định. Read/browse cũng có network allowlist để Runtime không trở thành OT scanner. Mặc định `other_writers_possible=true` cho tới khi commissioning evidence chứng minh ngược lại.
 
 **Publish là đặc quyền CAO HƠN command.** Role `ConfigAdmin` riêng biệt với role operator. Audit của publish mang canonical hash và **danh sách resource đã đổi**.
 
@@ -578,7 +600,7 @@ Máy trạng thái 4 trạng thái: `Active-Unack · Active-Ack · Cleared-Unack
 
 Kèm: alarm "comm fail" ở cấp cha **suppress** alarm của các tag con.
 
-Alarm event log là **lossless và tách khỏi historian** — nó là bằng chứng, không phải telemetry.
+Alarm event log có durability riêng và nằm trong **`alarms.db`**, tách khỏi historian/audit. Runtime là single writer; Web chỉ query qua RPC bằng snapshot + cursor/idempotent events. Alarm queue không chia sẻ overflow policy với sample queue.
 
 **Alarm là kênh dữ liệu thứ ba** (bên cạnh telemetry và command). Kênh này phải được **reserve trong transport ngay bây giờ**, dù engine làm sau — nếu không, slice làm alarm sẽ viết lại transport.
 
@@ -596,7 +618,10 @@ System.Conn.<name>.RequestsPerSec
 System.Conn.<name>.State
 System.Historian.WalSizeBytes           → §7.7
 System.Historian.WritesPerSec
-System.Historian.DroppedSamples
+System.Historian.CandidateSamples
+System.Historian.AcceptedSamples
+System.Historian.PersistedSamples
+System.Historian.GapsDetected
 System.Clock.StepCount                  → §7.6
 System.Clock.MonotonicEnforcedCount
 System.Config.ActiveVersion
@@ -608,7 +633,7 @@ System.Telemetry.MaxClientQueueDepth    → §11.4
 
 ### 10.3. Store-and-forward
 
-Buffer có **giới hạn**, overflow theo **ưu tiên** (alarm event > sample), và **đếm số bị drop** — phơi qua `System.Historian.DroppedSamples`. Một buffer không giới hạn là một cách hết RAM chậm; một buffer drop im lặng là một cách mất dữ liệu mà không ai biết.
+Sample queue có giới hạn và tách khỏi alarm journal, audit và command. Sau storage acknowledgement, mỗi record có stable ingest identity và retry không tạo trùng. Mất trước acceptance phải persist gap/high-water marker và raise system alarm; disk/WAL/queue warning phải xuất hiện trước exhaustion. Audit/command fail-closed và không bao giờ dùng sample overflow policy. Contract và partition strategy tại [ADR-0005](../../adr/0005-historian-durability-and-partitioning.md).
 
 ---
 
@@ -618,7 +643,7 @@ Buffer có **giới hạn**, overflow theo **ưu tiên** (alarm event > sample),
 
 | Tầng | Chạy ở | Trách nhiệm |
 |---|---|---|
-| **L1** — Scene model | C# + JS chia sẻ | Schema, validate, migrate, canonical serialize, `computeBounds` |
+| **L1** — Scene contract | JSON Schema + widget manifest là nguồn chuẩn; generated C#/TS | Schema, validate, migrate, canonical serialize, `computeBounds` |
 | **L2** — Renderer | JS | Dựng SVG, `applyValues`, `applyStructural`, `setCamera`, `hitTest` |
 | **L3** — Editor | JS | Selection, gesture, transaction, undo, overlay, spatial index |
 
@@ -634,7 +659,7 @@ setCamera(pan, zoom)
 
 Nếu gộp hai kênh, kiểm tra tồn tại và hình học rơi vào hot loop — đó chính là `if (editMode)` được đổi tên. Và `applyStructural` dùng `replaceChild`, thứ **phá node identity**: alarm blink restart, focus mất. Nên **`applyStructural` không bao giờ chạy ở run mode.**
 
-`setCamera` và `applyStructural` phải tồn tại **từ slice 1** — 4–6h bây giờ, ~40h sau, hoặc L2 bị viết lại.
+`setCamera` và `applyStructural` phải tồn tại từ renderer foundation để tránh viết lại L2.
 
 **Camera cần một chủ sở hữu duy nhất** — một module state ở L1 mà cả L2 và L3 subscribe. Hai bản sao camera sẽ desync ở zoom 400% + pan, và đó là bug người ta thấy chứ không phải bug ẩn.
 
@@ -677,7 +702,7 @@ Bbox của group là **dẫn xuất, không bao giờ lưu**.
 
 **Migration là forward-only pure function và không bao giờ được sửa sau khi release.** Bảo vệ bằng **golden corpus**: một file scene cho mỗi schema version đã release. `widgetType` lạ → **hard reject**. Style prop lạ → giữ lại + warning. **`SchemaVersion` và `Revision` là hai thứ khác nhau**, không được gộp.
 
-Golden test dùng **canonical serialization sinh từ L1** (attribute sắp thứ tự, float cố định 3 chữ số), **không bao giờ đọc lại từ DOM**. Không pixel-diff screenshot ở 0.4 FTE — chi phí bảo trì vượt giá trị.
+Golden test dùng **server-authoritative canonical bytes/hash** và shared conformance corpus chạy cả C# lẫn TypeScript, **không bao giờ đọc lại từ DOM**. Canonicalization giữ numeric meaning; quantization là thao tác editor tường minh, không phải side effect serialization.
 
 ### 11.3. Binding: T1 + T2, KHÔNG có expression engine
 
@@ -689,7 +714,7 @@ Golden test dùng **canonical serialization sinh từ L1** (attribute sắp th�
 
 T2 có bốn tính chất mà expression **không** có: serializable, phân tích tĩnh được, dependency luôn đúng một tag, và **render được thành UI editor** (một bảng color-stop). Trong một công cụ **kéo-thả**, bạn không thể bắt engineer viết expression — điều đó **phá vỡ mục tiêu 3**. Và thiết kế whitelist trước khi có use case thật là đoán.
 
-Bỏ T3 xoá luôn cả cụm: AST validation, whitelist hàm, giới hạn độ sâu, compile + cache, trích xuất dependency, **cycle detection**, execution budget, và UI soạn expression. **60–100h.**
+Bỏ T3 xoá luôn cả cụm: AST validation, whitelist hàm, giới hạn độ sâu, compile + cache, trích xuất dependency, **cycle detection**, execution budget, và UI soạn expression.
 
 Schema phải **reserve slot** cho tier binding ngay bây giờ, để mở T3 sau không thành migration.
 
@@ -739,7 +764,7 @@ Hai cái bẫy phải xử lý:
 
 Prerender: quy tắc double-mount phải rõ, hoặc JS module init hai lần.
 
-**Diagnostics HUD từ slice 1** (~1h): FPS, số DOM write, số frame drop, epoch hiện tại, và **send-queue depth per client** — chỉ số **duy nhất đi trước** sự cố (nó tăng trước khi client bắt đầu mất frame).
+**Diagnostics HUD từ renderer foundation:** FPS, số DOM write, số frame drop, epoch/watermark hiện tại, và **send-queue depth per client** — chỉ số đi trước sự cố.
 
 ### 11.6. Đa màn hình, canvas, và cảm ứng
 
@@ -747,16 +772,16 @@ Prerender: quy tắc double-mount phải rõ, hoặc JS module init hai lần.
 - Lifecycle teardown → subscribe. **`unmount()` phải được test nghiêm ngặt như `mount()`** — leak nằm ở đó, không nằm ở mount.
 - **Canvas cố định + uniform scale-to-fit + letterbox.** Không responsive reflow: một sơ đồ P&ID reflow là một sơ đồ sai.
 - **Cảm ứng là mặc định, không phải bổ sung.** Panel PC là màn hình cảm ứng: target ~44px, không có affordance chỉ-hover, dùng Pointer Events. Retrofit cảm ứng nghĩa là viết lại state machine của gesture.
-- **Ngôn ngữ thị giác thống nhất cho quality/staleness, và policy khi mất kết nối** — cái sau là **quyết định AN TOÀN, không phải quyết định UI**, và là thứ làm một HMI bị nhà máy từ chối. Phải chốt: sau bao lâu mất kết nối thì màn hình chuyển sang trạng thái "không tin được", và trạng thái đó trông như thế nào.
+- **Ngôn ngữ thị giác thống nhất cho quality/staleness và transport disconnect** tuân theo state matrix §7.4: Runtime tính Stale theo công thức đã khóa; browser chỉ thêm `RuntimeDisconnected`; mọi trạng thái không tin cậy đều có non-color cue, age, invalid count và khóa command.
 - **Screen inspector** trong L2 từ slice 1 — rẻ lúc đó, đắt khi retrofit.
 
 ### 11.7. Editor
 
-**Gate trước khi viết editor: viết tay 3–5 màn hình thật, tổng ~300 element** (một overview, một detail có input, một trend, một alarm list). Mỗi màn ~4–6h. Đây là cách rẻ nhất để tìm lỗ schema **trước khi** editor đóng cứng nó — nếu không, editor sẽ tự phát hiện chúng và buộc migration.
+**Gate trước khi viết editor: viết tay 3–5 màn hình thật, tổng khoảng 300 element** (một overview, một detail có input, một trend, một alarm list). Đây là cách trực tiếp để tìm lỗ schema **trước khi** editor đóng cứng nó — nếu không, editor sẽ tự phát hiện chúng và buộc migration.
 
 **Model của editor sống ở đâu: CHỈ trong JS.** Blazor panel là view thụ động, gửi intent vào cùng một transaction log. Một model C# với canvas JS phải round-trip mỗi `pointermove`; và bất kỳ cách chia đôi nào cũng cho một bug distributed-state không debug được.
 
-**MVP editor (~120–150h), cắt tường minh:**
+**MVP editor, cắt tường minh:**
 
 | Có | Không có (schema vẫn hỗ trợ) |
 |---|---|
@@ -770,7 +795,7 @@ Prerender: quy tắc double-mount phải rõ, hoặc JS module init hai lần.
 
 **Luật: schema đầy đủ ≠ editor đầy đủ.** Rotation, group, instance đều phải **có trong schema từ ngày đầu** dù editor MVP không tạo được chúng. Ngược lại là migration.
 
-Editor đủ tính năng: ~330–420h. Đây là hạng mục bị đánh giá thấp nhất trong dự án.
+Editor đầy đủ nằm ngoài MVP. Đây là hạng mục có nguy cơ scope drift lớn nhất trong dự án.
 
 ---
 
@@ -804,11 +829,11 @@ Bốn vòng rà soát sinh ra ~40 thay đổi. **Áp dụng cả 40 chính là c
 
 ### Nhóm A — Vào slice 0/1 (retrofit đắt 3–10×)
 
-Auth + `[Authorize]` fallback toàn cục · **envelope principal trong MỌI RPC từ RPC đầu tiên** (slice 0 được ignore giá trị; **hình dạng** phải có) · transport có xác thực ngay · audit hash chain dùng ngay cho login/publish/start-stop/load-error · schema command journal · **field `writeable` + area RBAC trong config schema từ version publish đầu tiên** (thêm field vào canonical JSON đã hash sau này tệ hơn migrate DB) · write policy envelope file mặc định writes-disabled · single-instance lock · `setCamera` + `applyStructural` · quality **bitfield** · `ts_us` + anchor monotonic · deadband so giá trị đã lưu · handle epoch · scan group + coalescing trong schema.
+Auth + `[Authorize]` fallback toàn cục · envelope principal trong mọi RPC · transport có xác thực ngay · audit hash chain dùng ngay cho login/publish/start-stop/load-error · schema command journal · field `writeable` + area RBAC trong config schema từ version publish đầu tiên · write policy envelope mặc định writes-disabled · single-instance lock · `setCamera` + `applyStructural` · quality severity/reason fields · logical `ts_us` + monotonic/boot metadata · deadband so giá trị đã lưu · subscription generation/epoch/watermark · scan group + coalescing trong schema.
 
-### Nhóm B — Luật viết ra, tốn 0h
+### Nhóm B — Luật chuẩn tắc, chưa cần subsystem riêng
 
-Telemetry lossy / historian+audit lossless · `Invalid` poison, không coerce · resize mutate geometry, không tích luỹ scale · editor không mutate DOM của L2 · cấm reference element→element · alarm không kích khi quality Bad · lệnh luôn absolute set-value · tier 2 không bao giờ gọi `Verified` · latest-value-wins per frame · không bao giờ để màn hình trông bình thường khi dữ liệu đã chết · **không bao giờ hướng dẫn "copy file này"** để backup (copy WAL đang sống là invalid — ship `VACUUM INTO`) · zero-CDN cưỡng chế bằng CSP không `unsafe-inline` + CI grep `https?://` + **container `--network none` smoke test coi console error là fail** (test duy nhất thật sự chứng minh mục tiêu 7).
+Telemetry latest-value/convergence · historian no-silent-loss · audit/command fail-closed · `Invalid` poison, không coerce · resize mutate geometry, không tích luỹ scale · editor không mutate DOM của L2 · cấm reference element→element · alarm không kích khi quality Bad · lệnh luôn absolute set-value · tier 2 không bao giờ gọi `Verified` · latest-value-wins per frame · không bao giờ để màn hình trông bình thường khi dữ liệu đã chết · **không bao giờ hướng dẫn "copy file này"** để backup · zero-CDN cưỡng chế bằng CSP không `unsafe-inline` + CI grep `https?://` + container `--network none` smoke test coi console error là fail.
 
 ### Nhóm C — Reserve slot, build sau
 
@@ -816,9 +841,9 @@ T3 expression · `kind:"instance"` + `tagScope` · rotation/group trong schema �
 
 ### Nhóm D — Cắt tường minh
 
-**Editor MVP** 120–150h thay vì 330–420h (§11.7).
+**Editor MVP** chỉ gồm phạm vi cột “Có” tại §11.7.
 
-**Mục tiêu 6 mỏng đi:** **Windows là platform được release-test đầy đủ** — installer, Windows Service, backup, upgrade path, và test nghiệm thu chạy trên đó. Linux và Docker **chạy được, có tài liệu, có support matrix công khai**, nhưng không có installer riêng. .NET làm "chạy trên 3 OS" gần như miễn phí; cái đắt là **packaging × 3 mỗi lần release, mãi mãi** — và đó là chi phí định kỳ mà một người part-time không trả được.
+**Mục tiêu 6 mỏng đi:** **Windows là platform được release-test đầy đủ** — installer, Windows Service, backup, upgrade path, và test nghiệm thu chạy trên đó. Linux và Docker **chạy được, có tài liệu, có support matrix công khai**, nhưng không có installer riêng. Ba target vẫn phải pass compatibility và zero-Internet gate; chỉ Windows nhận full release matrix.
 
 **Docker: TCP driver only. Modbus RTU KHÔNG được support trong Docker** — Windows container không có serial passthrough, Docker Desktop/WSL2 không pass được COM port, và timing 3.5 char không đáng tin qua abstraction USB-serial. RTU cần native install hoặc gateway serial-to-TCP (NPort / ser2net). Đây là **support matrix công khai**, không phải hạn chế ẩn.
 
@@ -836,30 +861,28 @@ T3 expression · `kind:"instance"` + `tagScope` · rotation/group trong schema �
 
 **Certificate.** Self-signed dạy operator bấm qua cảnh báo — thói quen đó là lỗ an ninh thật. Nên: sinh cert lúc first-run, **export root CA** để import vào máy client, và **đưa IP vào SAN** vì người ta sẽ browse bằng IP trần. Cẩn thận HSTS: bật sai sẽ khoá bạn ra khỏi một appliance LAN không sửa được từ xa.
 
-**Upgrade.** Runtime là **migrator duy nhất**, giữ lock. **gRPC contract có version, Web refuse to start nếu mismatch** — chạy lệch version còn tệ hơn không chạy. Migration forward-only, backup trước. **Schema historian chỉ được thêm, không đổi** — rewrite một bảng 6 tháng dữ liệu mất nhiều giờ, trên máy khách, trong giờ sản xuất. Healthcheck readiness thật, vì `depends_on` của Compose **không chờ** service sẵn sàng.
+**Upgrade.** Writer-owner migrate DB của mình: Web migrate `config.db`/`audit-web.db`; Runtime migrate historian catalog/partitions, `audit-runtime.db`, `alarms.db`; CLI chỉ orchestration offline. **gRPC contract có version, Web refuse to start nếu mismatch.** Migration forward-only, backup trước. Historian schema chỉ additive; healthcheck phải phản ánh readiness thật.
 
 ### 14.2. Vận hành thường ngày
 
-Single-instance lock (~20 dòng, chặn một class corrupt DB bạn sẽ gặp trong vòng một tháng). Backup command. CLI: `audit verify`, `backup`, `migrate`, `diag`.
+Single-instance lock để chặn concurrent writer. Backup command. CLI: `audit verify`, `backup`, `migrate`, `diag`.
 
 ---
 
 ## 15. Thứ tự triển khai
 
-Với 0.4 FTE, thứ tự là **risk-first, không phải value-first**: *sai chí tử không phải là làm sai chậm, mà là phát hiện giả định sai quá muộn.*
+Thứ tự chuẩn là **risk-first, không phải value-first** và được định nghĩa duy nhất trong `docs/superpowers/plans/2026-08-09-web-scada-hmi-risk-first-implementation-plan.md`. Bảng slice lịch sử dưới đây đã bị thay thế: minimal immutable publish/activation nằm trong foundation; process split là gate trước hardware; physical policy + capability + durable intent là gate trước write.
 
-| Slice | Nội dung | Xong khi |
-|---|---|---|
-| **0** | Nền + nhóm A. Blazor shell tối thiểu, auth, audit chain, envelope principal, single-instance lock, CI (NetArchTest + `--network none`) | Mở browser, login, audit chain verify được |
-| **1** | Sim driver → tag engine → historian → telemetry → một màn hình hard-coded. Camera + `applyStructural` + diagnostics HUD | Một tag sin wave chạy trên browser, ghi và trend lại được |
-| **2** | Modbus TCP. Scan group + coalescing + validator ngân sách. `System.*` | Đọc được PLC sim thật, cảnh báo được cấu hình bất khả thi |
-| **2.5** | **Ghi MỘT tag.** Sim only. Journal + audit event stream + readback + envelope + một cặp role. Không polish UI | Ghi được một tag, `audit verify` pass, `INDETERMINATE` tái hiện được |
-| **3** | Config version + publish + reconciliation + `tag_semantic_revision`. **3–5 màn hình viết tay (~300 element)** | Publish/rollback không gián đoạn tag không đổi |
-| **4** | Editor MVP (nhóm D) | Người khác tự vẽ được một màn hình |
-| **5** | Alarm engine + `QueryTrend` UI đầy đủ | Alarm không bão khi mất kết nối |
-| **6** | Modbus RTU + OPC UA + packaging Windows + support matrix | Chạy trên hardware thật |
+Các hard gate theo thứ tự là:
 
-**Vì sao Slice 2.5 nằm ở đó, trước editor và alarm:** write path là chỗ **bất định cao nhất**; editor và alarm là **effort cao / bất định thấp**. Phát hiện ở cuối dự án rằng verification tử tế **cần code phía PLC** (§8.4) sẽ invalidate những giả định đã đóng cứng trong config schema và audit semantics. Effort cao mà bất định thấp thì hoãn được an toàn; bất định cao thì không.
+1. Domain/time/Scene/config/audit contract và database ownership.
+2. Authenticated two-process production boundary trước simulator-to-hardware transition.
+3. Historian no-silent-loss và telemetry watermark/FSM trước UI runtime production.
+4. Runtime physical allowlist + authoritative capability + durable intent/crash matrix trước mọi write.
+5. Scene corpus và các màn hình viết tay trước editor; alarm snapshot/cursor trước alarm UI.
+6. Restore/upgrade rehearsal, zero-Internet và support matrix trước release.
+
+Task number, file, command và expected evidence cụ thể nằm trong implementation plan; bảng traceability §17 nối từng risk finding tới gate đó.
 
 Có thể hoãn an toàn: logic readback nâng cao, timer momentary OFF, tuning rate limit, UI PIN re-auth, polish CLI verify, UI sửa role, signed backup package, shelving/latching, PostgreSQL, Docker.
 
@@ -867,9 +890,9 @@ Có thể hoãn an toàn: logic readback nâng cao, timer momentary OFF, tuning 
 
 ## 16. Feasibility và rủi ro dự án
 
-### 16.1. Con số
+### 16.1. Evidence thay cho lịch nguồn lực
 
-20h/tuần *nominal* là **13–16h hiệu dụng** — part-time bị phạt **siêu tuyến tính** vì chi phí lấy lại context; hai buổi 10h không bằng một buổi 20h. Ước ~**650–700 giờ hiệu dụng/năm** so với khối lượng **~750–1.100h** → **14–18 tháng** cho cả 7 mục tiêu ở mức mỏng-nhưng-dùng-được.
+Không dùng ước lượng lịch hay quy mô nhân sự trong tài liệu này để điều khiển implementation. Scope được cắt theo hard gate và evidence; khi gate không xanh thì không chuyển task.
 
 Ba hạng mục bị đánh giá thấp nhất, theo thứ tự: **editor** → **deployment đa nền tảng** (không phải chi phí một lần mà là 3× chi phí *mỗi lần release, mãi mãi* — đây là lý do nhóm D cắt xuống một platform) → **driver trước khi có hardware thật**.
 
@@ -891,6 +914,41 @@ Time-box: vượt 1.5× thì **cắt scope, không kéo thời gian**. Trục c�
 
 ---
 
-## 17. Ngoài phạm vi
+## 17. Traceability review → ADR → automated gate
+
+Mỗi finding P0/P1 trong review ngày 2026-08-09 có một quyết định ADR và task triển khai phía sau. Với P0, cột gate là điều kiện tự động bắt buộc trước khi mở capability liên quan.
+
+| Finding | Hợp đồng đã khóa | ADR | Task triển khai sau Task 1 | Automated gate / evidence |
+|---|---|---|---|---|
+| P0-1 Process boundary | Hai process/identity trước hardware; Web không driver/credential/OT route | ADR-0001 | 3, 12, 33 | Deployment closure + two-process peer/ACL/IPC auth tests |
+| P0-2 Physical write envelope | Runtime positive allowlist của full physical tuple; config chỉ hẹp hơn | ADR-0004 | 11, 20 | Field-by-field config-remap attack matrix |
+| P0-3 Command revision/observation | Command bind activation/config/source/value/target/observation/generation | ADR-0004 | 4, 8, 10, 21–22 | Semantic hash + stale-observation/precondition E2E matrix |
+| P0-4 Identity authority | One-time bound capability + authoritative revocation/re-auth | ADR-0004 | 10, 21–22 | Replay/expiry/revocation/channel-binding tests |
+| P0-5 Durable ordering | Consume nonce + durable `DispatchIntent` trước driver I/O | ADR-0004 | 9, 21 | Fault injection/crash matrix proves no I/O before commit |
+| P0-6 Quality algebra | Severity, reason flags, native status tách; aggregate masks riêng | ADR-0002 | 4, 16 | Exhaustive quality combinations + bucket-duration tests |
+| P0-7 Historian contradiction | No-silent-loss; stable accepted identity; persisted gap marker | ADR-0005 | 15–16, 29 | Overflow/retry/gap/high-water and load tests |
+| P0-8 Snapshot→delta handoff | Generation + epoch + snapshot watermark + serialized dirty mailbox | ADR-0006 | 17 | Snapshot race/overflow/resync FSM tests |
+| P0-9 Stale/offline | Runtime stale formula; disconnected state riêng; invalid disables command | ADR-0002, ADR-0006 | 17, 19 | Fake-clock stale + validity/accessibility E2E matrix |
+| P0-10 Activation/order | Minimal publish foundation; activation FSM; atomic switch | ADR-0003 | 8, 23 | Activation crash/rollback/reconciliation state-machine tests |
+| P1-1 Clock model | Logical/ingest/source/monotonic/boot/revision + persisted high-water | ADR-0002 | 5 | Clock-step/restart/out-of-order source-time tests |
+| P1-2 Scene L1 authority | JSON Schema/manifest; generated C#/TS; server canonical hash | ADR-0006 | 6 | Shared cross-language conformance corpus |
+| P1-3 Scene normative schema | Stable IDs, geometry/order/actions/instances/limits/dangling refs | ADR-0006 | 6, 24 | Malicious/complexity corpus + hand-authored screens |
+| P1-4 Alarm storage | `alarms.db`, Runtime single writer, RPC-only Web access | ADR-0005 | 7, 27 | DB ownership + alarm crash/recovery tests |
+| P1-5 Alarm/trend transport | Snapshot/cursor/idempotent event/backfill/invalid-gap contract | ADR-0006 | 27–28 | Reconnect/backfill and render-state tests |
+| P1-6 Historian partition | Bounded partition batches, repository merge, retention pin/refcount | ADR-0005 | 16 | Long-range > attach-limit and concurrent-retention tests |
+| P1-7 Migration ownership | Mỗi writer migrate store của mình; CLI offline orchestration | ADR-0003, ADR-0005 | 7 | Wrong-owner ACL + statement-boundary crash tests |
+| P1-8 Audit L3 | Canonical chain metadata + signed external head seal | ADR-0004 | 9 | Modify/delete/reorder/truncate/seal-outage fixtures |
+| P1-9 Backup/restore | Coordinated causal cut, signed bounded package, atomic restore | ADR-0003, ADR-0005 | 32 | Crash/malicious archive/signature/compatibility tests |
+| P1-10 Driver contract | Cancellation/deadline/capability/partial result/native status/arbitration | ADR-0001 | 13–14 | Driver conformance + cancellation/arbitration tests |
+| P1-11 OT device security | OPC UA signed+encrypted/trustlist; Modbus zone/conduit/ACL | ADR-0001, ADR-0004 | 20, 31, 33 | Insecure-profile rejection + deployment network tests |
+| P1-12 RBAC | Deny default, bootstrap/break-glass/revocation/service/stale-circuit | ADR-0004 | 10, 22 | Permission matrix + endpoint-time revocation tests |
+| P1-13 Editor state | JS-owned optimistic concurrency/round-trip/conflict/transaction FSM | ADR-0006 | 25–26 | Conflict/disconnect/undo transaction tests |
+| P1-14 Accessibility | Transformed target, keyboard/focus/name/non-color/reduced-motion/cancel | ADR-0006 | 18–19, 26 | Automated accessibility + pointer/keyboard E2E tests |
+| P1-15 Frontend performance | Pinned baseline and node/frame/queue/payload/heap/RSS/20-client budgets | ADR-0006 | 18, 29, 34 | Repeatable 20-client × 300-tag load gate |
+| P1-16 IEC 62443 wording | Chỉ claim partial design intent tới khi có mapping/evidence độc lập | ADR-0001 | 33–34 | Release-doc claim scan + evidence checklist |
+
+---
+
+## 18. Ngoài phạm vi
 
 Phân tán / HA / clustering. Message broker. Kubernetes. Multi-tenant. Cloud. Mobile app riêng. Báo cáo/BI. MES/ERP integration. Redundant Runtime. Historian đa node. Bất kỳ chức năng safety nào (§1.1).
