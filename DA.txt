@@ -1,0 +1,1461 @@
+
+Tổng quan dự án Lightweight Web SCADA/HMI
+
+  Đây là bản Product Architecture / North Star Specification tập trung vào sản phẩm và kỹ thuật, tạm thời không xét bán hàng, pricing hay khảo sát thị trường.
+
+  Lưu ý quan trọng về phạm vi:
+
+  - Tài liệu này mô tả đích kiến trúc dài hạn, không nên xem toàn bộ nội dung là MVP đầu tiên.
+  - MVP phải được cắt thành các giai đoạn nhỏ để tránh làm nhiều module cùng lúc nhưng không module nào đủ ổn định để demo/thử nghiệm thực tế.
+  - Ưu tiên chứng minh Runtime đọc dữ liệu ổn định, Web hiển thị realtime, alarm cơ bản và historian đơn giản trước khi xây designer đầy đủ hoặc write command production.
+
+  ---
+  1. Tầm nhìn
+
+  Xây dựng một nền tảng SCADA/HMI nhẹ, hiện đại, chạy trên nền web, có khả năng:
+
+  - Thu thập dữ liệu thời gian thực từ PLC và thiết bị công nghiệp.
+  - Hiển thị trạng thái máy/dây chuyền trên trình duyệt.
+  - Cho phép thiết kế màn hình HMI bằng kéo-thả.
+  - Quản lý alarm, trend và dữ liệu lịch sử.
+  - Thực hiện các lệnh điều khiển có kiểm soát và audit.
+  - Chạy tại chỗ trên Windows, Linux hoặc Docker.
+  - Hoạt động độc lập với cloud và Internet.
+
+  Thông điệp kỹ thuật cốt lõi:
+
+  ▎ PLC thực hiện điều khiển thời gian thực; SCADA Runtime thu thập, giám sát và thực hiện supervisory control; trình duyệt chỉ là lớp giao diện.
+
+  ---
+  2. Mục tiêu dự án
+
+  2.1 Mục tiêu chính
+
+  1. Cài đặt một hệ thống SCADA cơ bản trong thời gian ngắn.
+  2. Ưu tiên read-only monitoring ổn định trước khi mở write command xuống PLC.
+  3. Hỗ trợ Simulator và Modbus TCP trong MVP đầu; OPC UA là mục tiêu rất quan trọng nhưng có thể đưa vào giai đoạn sau nếu cần cắt scope.
+  4. Cung cấp browser-based HMI runtime trước; screen designer ban đầu chỉ nên ở mức tối giản.
+  5. Quản lý chính xác:
+    - Tag value.
+    - Data type.
+    - Quality.
+    - Timestamp.
+    - Stale state.
+  6. Có alarm engine độc lập với giao diện.
+  7. Có historian và trend tích hợp theo từng giai đoạn.
+  8. Mọi lệnh ghi xuống PLC, khi được bật ở giai đoạn command/write, phải:
+    - Được xác thực.
+    - Được phân quyền.
+    - Được kiểm tra.
+    - Được audit.
+  9. Có backup, restore, publish và rollback theo mức tối thiểu trước, production-grade sau.
+  10. Chạy ổn định trong môi trường mạng nội bộ của nhà máy.
+  11. Có kiến trúc đủ mở để thêm driver, HA và multi-site sau này.
+
+  2.2 Không phải mục tiêu
+
+  Phiên bản đầu không nhằm:
+
+  - Thay thế PLC.
+  - Thực hiện hard real-time control.
+  - Chạy PID hoặc motion control.
+  - Thực hiện safety logic, SIL hoặc PL.
+  - Cung cấp E-stop qua web.
+  - Thay thế MES/ERP.
+  - Hỗ trợ hàng chục giao thức ngay lập tức.
+  - Xử lý hàng trăm nghìn tag.
+  - Cung cấp cloud SaaS multi-tenant.
+  - Cạnh tranh với historian enterprise quy mô petabyte.
+  - Cho phép người dùng chạy C# hoặc JavaScript tùy ý trong Runtime.
+
+  ---
+  3. Phạm vi triển khai mục tiêu
+
+  Phiên bản đầu được thiết kế cho một site hoặc một máy/cell nhỏ:
+
+  ┌────────────────────────────────┬────────────────────┐
+  │           Thành phần           │  Phạm vi mục tiêu  │
+  ├────────────────────────────────┼────────────────────┤
+  │ Tổng số tag cấu hình           │       Khoảng 2.000 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Tag quét nhanh 250 ms          │         Khoảng 100 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Tag quét 1 giây                │         Khoảng 900 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Tag quét 5 giây/subscription   │       Khoảng 1.000 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Kết nối thiết bị               │                4–8 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Người dùng đồng thời           │               1–20 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Tag hiển thị trên một màn hình │         Khoảng 300 │
+  ├────────────────────────────────┼────────────────────┤
+  │ Historian trung bình           │  1.000 sample/giây │
+  ├────────────────────────────────┼────────────────────┤
+  │ Historian burst                │  5.000 sample/giây │
+  ├────────────────────────────────┼────────────────────┤
+  │ Mô hình hệ thống               │ Một Runtime active │
+  ├────────────────────────────────┼────────────────────┤
+  │ Môi trường                     │     LAN/OT network │
+  └────────────────────────────────┴────────────────────┘
+
+  Đây là giới hạn thiết kế ban đầu, không phải giới hạn vĩnh viễn của sản phẩm.
+
+  Cần định nghĩa rõ khi benchmark:
+
+  - 1.000 sample/giây là raw acquisition hay sample sau historian deadband.
+  - 300 tag/màn hình cập nhật với batch interval bao nhiêu ms.
+  - SignalR payload mục tiêu cho mỗi client là bao nhiêu KB/s.
+  - Historian lưu mọi scan, on-change hay theo deadband.
+  - Tiêu chí pass/fail khi client bị mất delta và phải resync.
+
+  ---
+  4. Nhóm người dùng
+
+  Operator
+
+  - Xem màn hình vận hành.
+  - Xem trạng thái thiết bị.
+  - Acknowledge alarm.
+  - Thực hiện các lệnh được phép.
+  - Xem trend.
+  - Không được sửa cấu hình hệ thống.
+
+  Shift Lead/Supervisor
+
+  - Có quyền vận hành cao hơn.
+  - Shelve alarm theo thời hạn.
+  - Xem báo cáo vận hành.
+  - Thực hiện một số thao tác cần quyền bổ sung.
+
+  Engineer
+
+  - Cấu hình thiết bị và tag.
+  - Thiết kế màn hình.
+  - Cấu hình alarm và historian.
+  - Publish phiên bản project.
+  - Không mặc nhiên có quyền quản trị user hoặc security.
+
+  Administrator
+
+  - Quản lý user, role và authentication.
+  - Quản lý certificate, backup và system settings.
+  - Cấu hình chính sách bảo mật.
+  - Không mặc nhiên được phép điều khiển mọi thiết bị.
+
+  Auditor
+
+  - Chỉ đọc.
+  - Xem command audit.
+  - Xem thay đổi cấu hình.
+  - Xem alarm history.
+  - Xem login và security events.
+
+  Service account
+
+  - Dùng cho Runtime, database hoặc integration.
+  - Không đăng nhập tương tác.
+  - Chỉ có quyền tối thiểu cần thiết.
+
+  ---
+  5. Kiến trúc tổng thể
+
+  ┌──────────────────────────────────────────────────────┐
+  │                    Thiết bị OT                       │
+  │                                                      │
+  │  PLC ─ OPC UA Server ─ Modbus Device ─ MQTT Broker  │
+  └──────────────────────────┬───────────────────────────┘
+                             │
+                             ▼
+  ┌──────────────────────────────────────────────────────┐
+  │                   SCADA Runtime                      │
+  │                                                      │
+  │  Driver adapters                                     │
+  │  Connection supervisor                              │
+  │  Polling/subscription scheduler                     │
+  │  Tag normalization                                  │
+  │  Quality, timestamp và stale detection              │
+  │  Latest-value cache                                 │
+  │  Alarm engine                                       │
+  │  Safe command dispatcher                            │
+  │  Historian writer                                   │
+  │  Local durable spool                                │
+  └──────────────────────────┬───────────────────────────┘
+                             │
+                    Versioned gRPC/IPC
+                             │
+                             ▼
+  ┌──────────────────────────────────────────────────────┐
+  │                    SCADA Web                         │
+  │                                                      │
+  │  Blazor HMI runtime                                 │
+  │  Screen designer                                    │
+  │  REST API                                           │
+  │  SignalR telemetry                                  │
+  │  Authentication và RBAC                             │
+  │  Configuration service                             │
+  │  Audit service                                      │
+  └──────────────────────────┬───────────────────────────┘
+                             │ HTTPS/WSS
+                             ▼
+  ┌──────────────────────────────────────────────────────┐
+  │                    Trình duyệt                       │
+  │                                                      │
+  │  Operator station ─ Engineering station ─ Tablet    │
+  └──────────────────────────────────────────────────────┘
+
+  ---
+  6. Quyết định kiến trúc quan trọng
+
+  6.1 Tách Runtime khỏi Web
+
+  Runtime và Web là hai tiến trình hoặc hai service độc lập.
+
+  Runtime sở hữu
+
+  - Kết nối PLC và thiết bị.
+  - Polling và subscription.
+  - Latest tag state.
+  - Alarm evaluation.
+  - Historian pipeline.
+  - Command validation cuối cùng.
+  - Store-and-forward.
+
+  Web sở hữu
+
+  - Authentication.
+  - Authorization.
+  - HMI presentation.
+  - Screen designer.
+  - Configuration API.
+  - User session.
+  - Audit thao tác người dùng.
+
+  Lợi ích
+
+  Khi:
+
+  - Browser đóng.
+  - SignalR mất kết nối.
+  - Web service restart.
+  - Người dùng đăng xuất.
+
+  Runtime vẫn tiếp tục:
+
+  - Thu thập dữ liệu.
+  - Đánh giá alarm.
+  - Lưu historian.
+  - Duy trì quality/stale.
+  - Xử lý command đã được chấp nhận theo đúng policy.
+
+  Điều này tránh để vòng đời của giao diện ảnh hưởng tới acquisition và alarm.
+
+  Nguyên tắc bổ sung:
+
+  - Runtime là source of truth cho tag state; Web chỉ là API/UI layer.
+  - Runtime không được phụ thuộc ASP.NET Identity để tiếp tục acquisition/alarm.
+  - Khi Web mất kết nối tới Runtime, Web phải hiển thị rõ trạng thái "Runtime disconnected" thay vì hiện dữ liệu cũ như đang live.
+
+  ---
+  6.2 Browser không kết nối trực tiếp tới PLC
+
+  Mọi request phải đi qua Web và Runtime.
+
+  Không cho phép browser:
+
+  - Gửi Modbus packet trực tiếp.
+  - Kết nối OPC UA trực tiếp.
+  - Chứa PLC credential.
+  - Tự quyết định command thành công.
+  - Tự đánh giá interlock.
+  - Lưu driver configuration nhạy cảm.
+
+  Runtime là nơi duy nhất có quyền truy cập mạng điều khiển.
+
+  ---
+  6.3 Local-first
+
+  Toàn bộ chức năng quan trọng phải hoạt động trong mạng nội bộ:
+
+  - Acquisition.
+  - Alarm.
+  - Historian.
+  - HMI.
+  - Command.
+  - Authentication local.
+  - Backup.
+  - Restore.
+
+  Cloud chỉ có thể được bổ sung về sau cho:
+
+  - Fleet visibility.
+  - Update metadata.
+  - Remote support có kiểm soát.
+  - License management.
+  - Aggregate monitoring.
+
+  Cloud outage không được làm dừng Runtime tại site.
+
+  ---
+  7. Stack công nghệ đề xuất
+
+  ┌────────────────────────────┬──────────────────────────────────────────┐
+  │            Lớp             │                Công nghệ                 │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Runtime                    │ .NET 10 Worker Service                   │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Web backend                │ ASP.NET Core 10                          │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ UI                         │ Blazor Web App                           │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ UI render mode             │ Static SSR + Interactive Server          │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Realtime UI                │ SignalR                                  │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Runtime–Web communication  │ gRPC hoặc versioned IPC                  │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Production database        │ PostgreSQL                               │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Edge spool                 │ SQLite WAL                               │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ ORM/configuration          │ EF Core hoặc Dapper tùy workload         │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ OPC UA                     │ OPC Foundation UA-.NETStandard           │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Modbus                     │ NModbus hoặc adapter tương đương         │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ MQTT, nếu cần              │ MQTTnet                                  │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Observability              │ OpenTelemetry + structured logging       │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Deployment                 │ Windows Service, systemd, Docker Compose │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Authentication             │ ASP.NET Core Identity                    │
+  ├────────────────────────────┼──────────────────────────────────────────┤
+  │ Enterprise identity về sau │ OIDC/Entra ID/Keycloak                   │
+  └────────────────────────────┴──────────────────────────────────────────┘
+
+  Ghi chú quyết định stack:
+
+  - Nên dùng latest .NET LTS tại thời điểm triển khai. Nếu cần production sớm, ưu tiên .NET LTS ổn định thay vì khóa cứng theo version chưa phù hợp với lịch release.
+  - MVP nên chọn rõ Runtime–Web communication là gRPC over localhost/TCP với protobuf contracts versioned trong Scada.Contracts. Named pipes, Unix domain socket hoặc mTLS cross-machine có thể bổ sung sau.
+  - EF Core phù hợp cho configuration, identity và metadata. Historian, alarm journal và telemetry write volume cao nên dùng batch writer/Dapper/bulk insert, không dùng EF Core tracking từng sample.
+  - MVP đầu nên có Simulator và Modbus TCP. OPC UA là driver quan trọng nhưng có thể đưa vào phase sau nếu cần giảm rủi ro.
+  - SQLite WAL spool là hướng production tốt, nhưng MVP đầu có thể bắt đầu bằng historian đơn giản rồi bổ sung durable spool/backfill ở phase sau.
+
+  Blazor rendering
+
+  - Static SSR cho login, system status và nội dung ít tương tác.
+  - Interactive Server cho:
+    - HMI runtime.
+    - Alarm list.
+    - Trend.
+    - Configuration.
+    - Screen designer.
+  - Dedicated telemetry hub chỉ bổ sung nếu benchmark cho thấy Blazor rendering không đủ với màn hình SVG dày.
+  - Với HMI runtime dày, nên ưu tiên mô hình hybrid: Blazor quản lý shell, auth, navigation, configuration và designer; JS module nhận delta compact qua SignalR và cập nhật trực tiếp SVG attributes để tránh render diff quá lớn.
+
+  ---
+  8. Các module chức năng
+
+  8.1 Project Manager
+
+  Đại diện cho một hệ thống SCADA hoàn chỉnh.
+
+  Chức năng:
+
+  - Tạo project.
+  - Clone project.
+  - Import/export.
+  - Version configuration.
+  - Draft/published state.
+  - Validate trước publish.
+  - Rollback về phiên bản trước.
+  - Backup/restore.
+  - Theo dõi lịch sử thay đổi.
+
+  Một project bao gồm:
+
+  - Devices.
+  - Drivers.
+  - Tags.
+  - Alarm definitions.
+  - Historian policies.
+  - Screens.
+  - Equipment templates.
+  - Users/roles hoặc reference tới system identity.
+  - Project settings.
+
+  ---
+  8.2 Device và Connection Manager
+
+  Quản lý kết nối tới thiết bị.
+
+  Một device có:
+
+  - Device ID.
+  - Tên và mô tả.
+  - Driver type.
+  - Endpoint/IP/port.
+  - Credential/certificate reference.
+  - Timeout.
+  - Retry policy.
+  - Scan configuration.
+  - Health state.
+  - Diagnostic counters.
+
+  Trạng thái kết nối:
+
+  Disabled
+  Connecting
+  Online
+  Degraded
+  Reconnecting
+  Offline
+  Faulted
+
+  Diagnostics cần hiển thị:
+
+  - Lần kết nối thành công gần nhất.
+  - Lỗi gần nhất.
+  - Request rate.
+  - Timeout count.
+  - Reconnect count.
+  - Average latency.
+  - Missed cycles.
+  - Số tag Good/Bad/Stale.
+
+  ---
+  8.3 Driver Abstraction
+
+  Mỗi driver triển khai một contract thống nhất:
+
+  Connect
+  Disconnect
+  Browse
+  Read
+  Write
+  Subscribe
+  Unsubscribe
+  GetDiagnostics
+
+  Domain model không được phụ thuộc trực tiếp vào kiểu dữ liệu của thư viện vendor.
+
+  Ví dụ:
+
+  - OPC UA StatusCode được giữ trong NativeStatusCode.
+  - Modbus address được giữ như cấu hình driver.
+  - Domain chỉ nhận TagSample chuẩn hóa.
+
+  MVP chỉ có built-in trusted drivers. Third-party plugin marketplace không nằm trong phiên bản đầu.
+
+  ---
+  8.4 Tag Engine
+
+  Tag definition
+
+  TagDefinition
+    TagId
+    Path
+    Name
+    DataType
+    Unit
+    DeviceId
+    NativeAddress
+    AcquisitionMode
+    ScanClass
+    Scaling
+    WritablePolicy
+    AlarmPolicy
+    HistorianPolicy
+    UiDeadband
+    HistorianDeadband
+
+  Tag sample
+
+  TagSample
+    TagId
+    TypedValue
+    Quality
+    NativeStatusCode
+    SourceTimestampUtc
+    ServerTimestampUtc
+    ReceiveTimestampUtc
+    Sequence
+
+  Quality
+
+  Tối thiểu:
+
+  Good
+  Uncertain
+  Bad
+  Stale
+  Initializing
+  Disabled
+
+  Không dùng null để biểu diễn đồng thời:
+
+  - Chưa đọc.
+  - Mất kết nối.
+  - Giá trị thật sự null.
+  - Sai kiểu dữ liệu.
+  - Tag bị disable.
+
+  Pipeline
+
+  Driver read/subscription
+  → Type normalization
+  → Native quality mapping
+  → Timestamp normalization
+  → Out-of-order handling
+  → Scaling
+  → Latest-value cache
+  → Alarm evaluation
+  → Historian policy
+  → UI batching
+
+  Alarm phải được đánh giá trước UI/historian deadband để không bỏ sót threshold crossing.
+
+  ---
+  8.5 Polling Scheduler
+
+  Không tạo một timer cho mỗi tag.
+
+  Sử dụng scan classes:
+
+  - 250 ms.
+  - 1 giây.
+  - 5 giây.
+  - 30 giây.
+
+  Scheduler cần:
+
+  - Dùng monotonic clock.
+  - Group tags theo device và scan class.
+  - Gộp Modbus addresses thành block.
+  - Không cho hai request chồng nhau trên cùng connection.
+  - Không catch-up vô hạn khi bị trễ.
+  - Ghi nhận missed cycle.
+  - Cô lập lỗi giữa các device.
+
+  Với OPC UA hoặc MQTT, ưu tiên subscription thay cho polling khi phù hợp.
+
+  ---
+  8.6 Latest-Value Cache
+
+  Runtime duy trì state mới nhất của mỗi tag trong bộ nhớ.
+
+  Cache cung cấp:
+
+  - Snapshot đầy đủ.
+  - Delta theo sequence.
+  - Query theo tag ID/path.
+  - Subscription theo màn hình hoặc area.
+  - Version number để Web phát hiện gap.
+  - Resync nếu client bỏ lỡ delta.
+
+  Browser mở một màn hình sẽ:
+
+  1. Đăng ký danh sách tag cần xem.
+  2. Nhận snapshot ban đầu.
+  3. Nhận delta theo batch.
+  4. Resync nếu sequence bị thiếu.
+
+  Không broadcast toàn bộ project tới mọi client.
+
+  ---
+  9. Screen Runtime và Designer
+
+  9.1 Mô hình màn hình
+
+  Nên lưu structured scene JSON làm source of truth, không lưu raw SVG tùy ý.
+
+  Screen
+    ScreenId
+    Name
+    Width
+    Height
+    ViewBox
+    Background
+    Elements[]
+    SchemaVersion
+    Revision
+
+  Một element có:
+
+  Element
+    ElementId
+    WidgetType
+    Position
+    Size
+    Rotation
+    ZIndex
+    Style
+    Properties
+    Bindings
+    Commands
+    VisibilityExpression
+
+  Renderer sinh SVG từ widget whitelist.
+
+  9.2 Widget MVP
+
+  - Text.
+  - Numeric display.
+  - Numeric input.
+  - Status lamp.
+  - Button.
+  - Toggle.
+  - Gauge.
+  - Progress/bar.
+  - Tank.
+  - Pipe.
+  - Image.
+  - Shape.
+  - Alarm summary.
+  - Trend.
+  - Equipment faceplate.
+
+  9.3 Designer MVP
+
+  Designer là một trong các phần tốn effort nhất, nên chia scope rõ.
+
+  Designer tối thiểu cho MVP đầu:
+
+  - Canvas SVG.
+  - Add widget từ whitelist.
+  - Select.
+  - Drag/drop.
+  - Resize.
+  - Property panel.
+  - Tag browser.
+  - Binding editor cơ bản.
+  - Preview.
+  - Save/publish.
+
+  Đưa sang phase sau:
+
+  - Multi-select nâng cao.
+  - Rotate.
+  - Group/ungroup.
+  - Z-order phức tạp.
+  - Grid và snap nâng cao.
+  - Copy/paste.
+  - Undo/redo đầy đủ.
+  - Version và rollback nâng cao.
+  - Equipment template/faceplate library.
+
+  Không cố xây Figma cho công nghiệp trong MVP đầu.
+
+  9.4 Những thứ không cho phép ban đầu
+
+  - Raw JavaScript.
+  - Inline event handlers.
+  - javascript: URL.
+  - Arbitrary HTML.
+  - foreignObject.
+  - File/network access từ expression.
+  - Import SVG không sanitize.
+  - C# scripting tùy ý.
+
+  ---
+  10. Binding và Expression Engine
+
+  Binding liên kết thuộc tính widget với tag:
+
+  Text        ← Tag value
+  Fill color  ← State expression
+  Visibility  ← Boolean expression
+  Rotation    ← Numeric expression
+  Enabled     ← Permission + process state
+
+  Expression engine chỉ hỗ trợ:
+
+  - Toán học.
+  - So sánh.
+  - Boolean.
+  - Ternary.
+  - Formatting.
+  - min, max, abs, round, coalesce.
+  - Tag references.
+
+  Ví dụ:
+
+  Tank.Level > 90 ? "red" : "green"
+  Motor.Running && Motor.Quality == Good
+  round(Pressure.Value, 2)
+
+  Cần có:
+
+  - AST validation.
+  - Function whitelist.
+  - Expression length/depth limit.
+  - Compile/cache.
+  - Dependency extraction.
+  - Cycle detection.
+  - Execution budget.
+
+  ---
+  11. Command và Write Engine
+
+  Khuyến nghị scope:
+
+  - MVP đầu nên là read-only monitoring để giảm rủi ro vận hành và trách nhiệm an toàn.
+  - Command/write chỉ nên bật ở phase sau, trước hết với simulator hoặc thao tác non-critical.
+  - Khi đưa vào production, command/write phải được xem là một transaction nghiệp vụ có audit, validation, readback và timeout semantics rõ ràng.
+
+  Command phải được xử lý như một transaction nghiệp vụ, không phải request ghi đơn giản.
+
+  Lifecycle
+
+  Requested
+  → Authorized
+  → Validated
+  → Accepted
+  → Dispatched
+  → ProtocolAcknowledged
+  → ReadbackVerified
+  → Completed / Failed / TimedOut
+
+  Kiểm tra trước khi ghi
+
+  - User đã đăng nhập.
+  - User có role phù hợp.
+  - User được phép thao tác area/tag.
+  - Tag nằm trong writable whitelist.
+  - Kiểu dữ liệu đúng.
+  - Giá trị nằm trong range/enum.
+  - Device đang online.
+  - Tag quality phù hợp.
+  - Operating mode cho phép.
+  - Interlock/permissive hợp lệ.
+  - Expected current value còn đúng.
+  - Command không vượt rate limit.
+
+  Audit command
+
+  Mỗi command lưu:
+
+  - Command ID.
+  - Actor.
+  - Role.
+  - Client/IP.
+  - Tag.
+  - Requested value.
+  - Previous value.
+  - Readback value.
+  - Configuration version.
+  - Timestamps.
+  - Driver result.
+  - Success/failure.
+  - Comment/reason.
+
+  Momentary command
+
+  Ví dụ nút Jog:
+
+  Write ON
+  → Server-side maximum duration
+  → Write OFF
+
+  Nếu lệnh OFF thất bại, phải phát sinh command fault/alarm.
+
+  Không dùng browser mouseup làm cơ chế duy nhất để dừng thiết bị vì browser có thể mất kết nối.
+
+  ---
+  12. Alarm Engine
+
+  Alarm engine chạy trong Runtime và không phụ thuộc màn hình nào đang mở.
+
+  State cơ bản
+
+  Normal
+  Active/Unacknowledged
+  Active/Acknowledged
+  Returned/Unacknowledged
+  Returned/Acknowledged
+
+  Ngoài condition state, lưu riêng:
+
+  - Acknowledged.
+  - Shelved.
+  - Suppressed.
+  - Out of service.
+  - Enabled.
+  - Latched.
+  - Presentation required.
+
+  Không nên gộp tất cả thành một enum lớn.
+
+  Alarm definition
+
+  AlarmDefinition
+    AlarmId
+    SourceTag
+    Condition
+    Priority
+    Setpoint
+    Hysteresis
+    OnDelay
+    OffDelay
+    Latching
+    Message
+    Cause
+    Consequence
+    OperatorAction
+    ResponseTime
+    ShelvingPolicy
+    SuppressionRule
+
+  Chức năng MVP
+
+  - Digital alarm.
+  - High/HighHigh.
+  - Low/LowLow.
+  - Deviation alarm cơ bản.
+  - Delay.
+  - Hysteresis.
+  - Latching.
+  - Acknowledge.
+  - Acknowledge comment.
+  - Timed shelving.
+  - Suppression theo operating mode.
+  - Out-of-service.
+  - Alarm history.
+  - Standing alarm report.
+  - Basic flood rate.
+  - Bad-quality/stale alarm.
+
+  Mọi transition phải được ghi vào append-only event journal.
+
+  Cần làm rõ trong thiết kế alarm:
+
+  - Alarm priority scale cụ thể, ví dụ ISA-18.2 style hoặc thang 1–4.
+  - Alarm evaluation dùng source timestamp hay receive timestamp.
+  - Khi tag quality chuyển Bad thì alarm process-value xử lý thế nào.
+  - Alarm state được khôi phục thế nào sau khi Runtime restart.
+  - Idempotency key cho alarm transition để tránh ghi trùng khi retry.
+  - Shelving có max duration và yêu cầu quyền riêng.
+
+  Ví dụ state transition:
+
+  Normal → Active/Unacknowledged
+  Active/Unacknowledged → Active/Acknowledged
+  Active/Acknowledged → Returned/Acknowledged
+  Active/Unacknowledged → Returned/Unacknowledged
+  Returned/Unacknowledged → Returned/Acknowledged → Normal
+
+  ---
+  13. Historian và Trend
+
+  PostgreSQL
+
+  Làm production datastore mặc định cho:
+
+  - Historian.
+  - Alarm journal.
+  - Alarm current state.
+  - Command audit.
+  - Configuration.
+  - Project revisions.
+  - User metadata.
+
+  Historian table cần:
+
+  - Partition theo thời gian.
+  - Batch insert.
+  - Index (tag_id, timestamp).
+  - Raw retention.
+  - Aggregate tables.
+  - Compression hoặc TimescaleDB chỉ khi cần.
+
+  SQLite spool
+
+  Khuyến nghị theo giai đoạn:
+
+  - MVP-A có thể ghi historian trực tiếp vào một database (PostgreSQL hoặc SQLite), khi DB lỗi thì mark degraded và queue in-memory có giới hạn.
+  - Durable spool đầy đủ với backfill, idempotency, ordering và duplicate prevention nên đưa vào phase sau vì tốn nhiều công recovery testing.
+
+  Runtime ghi vào SQLite WAL khi PostgreSQL:
+
+  - Tạm thời unavailable.
+  - Network bị gián đoạn.
+  - Web/database đang restart.
+
+  Spool cần:
+
+  - Một writer.
+  - Batch transaction.
+  - Sequence.
+  - Retry.
+  - Central acknowledgement.
+  - Chỉ xóa dữ liệu sau khi PostgreSQL xác nhận.
+  - Giới hạn dung lượng và cảnh báo disk usage.
+
+  Trend
+
+  MVP cần:
+
+  - Live trend.
+  - Historical range.
+  - Multi-tag.
+  - Zoom/pan.
+  - Min/max/average aggregation.
+  - CSV export.
+  - Quality indication.
+  - Automatic downsampling cho range dài.
+
+  ---
+  14. Authentication, Authorization và Audit
+
+  Authentication
+
+  MVP:
+
+  - ASP.NET Core Identity.
+  - Secure cookie.
+  - Password policy.
+  - Lockout.
+  - Session expiry.
+  - Persisted Data Protection keys.
+
+  Giai đoạn sau:
+
+  - OIDC.
+  - Entra ID.
+  - Keycloak.
+  - LDAP integration.
+  - MFA cho Engineer/Admin.
+
+  RBAC
+
+  Role cơ bản:
+
+  - Operator.
+  - Supervisor.
+  - Engineer.
+  - Administrator.
+  - Auditor.
+  - Service.
+
+  Ngoài role, nên có resource-based policy:
+
+  User A:
+    Read Area-1
+    Write Area-1/PumpStation
+    No access Area-2
+
+  User B:
+    Read all
+    No write
+
+  Khuyến nghị theo giai đoạn:
+
+  - MVP đầu chỉ cần role-based permission đơn giản: Admin, Engineer, Operator, Viewer.
+  - Area-based permission bổ sung ở phase sau.
+  - Tag-level permission là phức tạp nhất, chỉ nên làm khi đã ổn định vì ảnh hưởng binding visibility, command validation, API filtering và audit explanation.
+
+  Audit
+
+  Phải audit:
+
+  - Login/logout/failure.
+  - User/role changes.
+  - Device/tag configuration.
+  - Project publish/rollback.
+  - Alarm acknowledge/shelve/OOS.
+  - Command.
+  - Backup/restore.
+  - Driver changes.
+  - Certificate/security settings.
+  - Update installation.
+
+  Operator không được xóa audit log.
+
+  ---
+  15. Deployment
+
+  Windows
+
+  - Runtime chạy Windows Service.
+  - Web chạy Windows Service hoặc IIS/reverse proxy.
+  - Dedicated service account.
+  - Không cần administrator sau khi cài.
+
+  Linux
+
+  - Runtime và Web chạy dưới systemd.
+  - Dedicated Unix users.
+  - Reverse proxy tùy cấu hình.
+  - File permission tối thiểu.
+
+  Docker
+
+  Docker Compose gồm:
+
+  scada-runtime
+  scada-web
+  postgresql
+  optional-otel-collector
+
+  Persistent volumes:
+
+  - PostgreSQL data.
+  - SQLite spool.
+  - Certificates.
+  - Data Protection keys.
+  - Backups.
+  - Project exports.
+
+  Container chạy non-root và có CPU/memory limits.
+
+  Installation profiles
+
+  All-in-one
+
+  - Runtime.
+  - Web.
+  - PostgreSQL.
+  - Cùng một IPC/edge machine.
+
+  Split deployment về sau
+
+  - Runtime tại OT zone.
+  - Web tại supervisory zone.
+  - PostgreSQL riêng.
+  - Historian replica tại DMZ/IT.
+
+  ---
+  16. Observability
+
+  Cần cung cấp:
+
+  Metrics
+
+  - Tag update rate.
+  - Read/write latency.
+  - Device status.
+  - Reconnect count.
+  - Timeout count.
+  - Missed poll cycles.
+  - Alarm event rate.
+  - Historian queue depth.
+  - Spool size.
+  - Active browser sessions.
+  - SignalR payload rate.
+  - Command result count.
+  - CPU/memory/disk.
+
+  Logs
+
+  Structured logs với:
+
+  - Timestamp.
+  - Service.
+  - Severity.
+  - Device ID.
+  - Tag ID.
+  - Command ID.
+  - Correlation ID.
+  - User ID khi phù hợp.
+
+  Không ghi password, certificate private key hoặc sensitive recipe vào log.
+
+  Health endpoints
+
+  - Runtime alive.
+  - Web alive.
+  - Database reachable.
+  - Spool writable.
+  - Disk capacity.
+  - Driver health.
+  - Certificate expiry.
+  - Clock synchronization status.
+
+  ---
+  17. Backup và Restore
+
+  Backup phải bao gồm:
+
+  - Project configuration.
+  - Screen revisions.
+  - Device/tag definitions.
+  - Alarm definitions.
+  - User/role metadata.
+  - Historian theo retention policy.
+  - Certificates.
+  - Data Protection keys.
+  - License.
+  - Application version manifest.
+  - SBOM.
+  - Custom assets.
+
+  Các mức backup:
+
+  1. Configuration backup nhanh.
+  2. Full site backup.
+  3. Database backup.
+  4. Golden installer/release package.
+
+  Restore phải kiểm tra:
+
+  - Schema version.
+  - Application compatibility.
+  - Hash/signature.
+  - Missing dependency.
+  - Certificate availability.
+  - Driver compatibility.
+
+  Khuyến nghị theo giai đoạn:
+
+  - MVP đầu chỉ cần export/import project configuration, database backup cơ bản và một restore test đơn giản.
+  - Historian full backup, license, SBOM, signed restore package và certificate migration phức tạp thuộc phase production hardening.
+
+  MVP đạt mức production phải có ít nhất một automated restore test trước khi release.
+
+  ---
+  18. Security boundary
+
+  Sản phẩm phải công bố rõ:
+
+  ▎ HMI/SCADA là supervisory layer, không phải safety controller.
+
+  Không được thực hiện trong Web/Runtime:
+
+  - E-stop.
+  - SIS trip.
+  - Safety interlock.
+  - Motion safety.
+  - Burner safety.
+  - SIL/PL logic.
+  - Protection layer duy nhất.
+
+  PLC hoặc safety controller phải:
+
+  - Kiểm tra range.
+  - Kiểm tra mode.
+  - Kiểm tra permissive/interlock.
+  - Từ chối command nguy hiểm.
+  - Duy trì safe state khi HMI lỗi.
+  - Không phụ thuộc HMI để thực hiện trip.
+
+  Security baseline:
+
+  - Không Internet exposure mặc định.
+  - TLS.
+  - Không default password.
+  - Least privilege.
+  - Signed update.
+  - SBOM.
+  - Patch policy.
+  - Vulnerability disclosure.
+  - Remote access tắt mặc định.
+  - Backup/restore.
+  - Audit.
+
+  Threat model tối thiểu cần nêu rõ:
+
+  - Operator nội bộ lạm quyền hoặc thao tác nhầm.
+  - Engineer/Admin account bị compromise.
+  - Web bị expose nhầm ra IT network hoặc Internet.
+  - PLC credential leak.
+  - Project/SVG/asset import là untrusted input, phải sanitize.
+  - Replay hoặc forge command.
+  - CSRF/anti-forgery cho mọi command và config endpoint.
+  - SignalR session hijack.
+  - Backup chứa secret hoặc key.
+  - Restore package bị chỉnh sửa, phải verify hash/signature.
+
+  Biện pháp tối thiểu tương ứng:
+
+  - Không tin browser-to-PLC dưới mọi hình thức.
+  - Command và config endpoint bắt buộc anti-forgery và secure same-site cookie.
+  - Secret lưu qua OS secret store hoặc encrypted at rest.
+  - Kênh Runtime–Web phải được xác thực.
+  - Audit log append-only, hướng tới tamper-evident ở phiên bản sau.
+
+  ---
+  19. Cấu trúc solution đề xuất
+
+  src/
+    Scada.Domain/
+      Tags/
+      Alarms/
+      Commands/
+      Historian/
+      Projects/
+      Security/
+
+    Scada.Contracts/
+      Runtime/
+      Telemetry/
+      Configuration/
+      Commands/
+
+    Scada.Runtime/
+      Acquisition/
+      Scheduling/
+      Connections/
+      Cache/
+      AlarmEngine/
+      CommandEngine/
+      Historian/
+      Spool/
+
+    Scada.Drivers.Abstractions/
+    Scada.Drivers.OpcUa/
+    Scada.Drivers.Modbus/
+    Scada.Drivers.Simulator/
+
+    Scada.Infrastructure.Postgres/
+    Scada.Infrastructure.Sqlite/
+    Scada.Infrastructure.Identity/
+
+    Scada.Web/
+      Components/
+      Hmi/
+      Alarms/
+      Trends/
+      Administration/
+      Api/
+      SignalR/
+
+    Scada.Designer/
+      SceneModel/
+      Widgets/
+      Bindings/
+      Expressions/
+      Validation/
+
+    Scada.Cli/
+      Validate/
+      Export/
+      Import/
+      Backup/
+      Restore/
+
+  tests/
+    Scada.Domain.Tests/
+    Scada.Runtime.Tests/
+    Scada.Driver.Tests/
+    Scada.Alarm.Tests/
+    Scada.Command.Tests/
+    Scada.IntegrationTests/
+    Scada.LoadTests/
+    Scada.SecurityTests/
+
+  Không nhất thiết phải tạo toàn bộ project ngay ngày đầu, nhưng boundary nên được giữ rõ.
+
+  ---
+  20. Chiến lược kiểm thử
+
+  Unit tests
+
+  - Scaling.
+  - Quality mapping.
+  - Deadband.
+  - Alarm transitions.
+  - Shelving expiry.
+  - Command validation.
+  - Expression evaluation.
+  - Permission policies.
+
+  Integration tests
+
+  - Runtime–Web IPC.
+  - PostgreSQL.
+  - SQLite spool.
+  - Database outage/recovery.
+  - OPC UA simulator.
+  - Modbus simulator.
+  - Authentication.
+  - Backup/restore.
+
+  Hardware-in-the-loop
+
+  - PLC Siemens thật nếu hỗ trợ S7.
+  - Modbus TCP device hoặc simulator chuẩn.
+  - OPC UA server của nhiều vendor.
+  - Network delay/loss.
+  - PLC restart.
+  - Cable disconnect.
+  - Duplicate/out-of-order update.
+
+  Fault tests
+
+  - Web crash.
+  - Runtime crash.
+  - Database unavailable.
+  - Disk full.
+  - Network partition.
+  - PLC timeout.
+  - Certificate expiry.
+  - Browser reconnect.
+  - Command timeout.
+  - Failed momentary OFF.
+  - Clock drift.
+
+  Performance tests
+
+  - 2.000 tags.
+  - 20 browser sessions.
+  - 1.000 samples/s trong 72 giờ.
+  - Alarm burst.
+  - Dense SVG screen.
+  - Trend query range dài.
+  - Database recovery và backfill.
+
+  ---
+  21. Lộ trình MVP theo giai đoạn
+
+  Toàn bộ danh sách bên dưới là đích production đầy đủ. Không nên xem toàn bộ là MVP đầu tiên. Nên chia thành các giai đoạn.
+
+  21.1 MVP-A — Read-only Monitoring
+
+  Mục tiêu: chứng minh Runtime đọc dữ liệu ổn định và Web hiển thị realtime.
+
+  - .NET Worker Runtime tách khỏi Web.
+  - Simulator driver và Modbus TCP driver.
+  - Tag config, scan class 1s/5s.
+  - Latest-value cache với snapshot, delta, sequence, stale detection.
+  - SignalR delta push.
+  - Basic HMI viewer từ scene JSON, khoảng 6 widget: text, numeric display, status lamp, gauge, button read-only, trend.
+  - Basic alarm: digital, high, low, acknowledge, alarm history.
+  - Historian đơn giản, batch write, query latest/range.
+  - Docker Compose hoặc Windows Service, chọn một trước.
+  - Basic login và role: Admin, Engineer, Operator, Viewer.
+  - Audit login, config change, alarm ack.
+
+  Tiêu chí pass MVP-A:
+
+  1. Đọc 2.000 simulated tags trong sizing envelope.
+  2. Đọc 500–1.000 Modbus tags tùy thiết bị/simulator.
+  3. Quality, timestamp và stale hiển thị đúng.
+  4. Mất Web không làm dừng acquisition/alarm/historian.
+  5. Web reconnect nhận lại snapshot đúng, resync khi thiếu delta.
+  6. Alarm không mất event khi Web restart.
+  7. Historian chạy ổn định 24–72 giờ.
+  8. 10 browser clients, một màn hình 100–200 bindings.
+
+  21.2 MVP-B — Designer + Historian + Trend
+
+  - Scene JSON làm source of truth.
+  - Designer tối thiểu: add/move/resize/configure widget, tag browser, binding editor, preview, save/publish.
+  - Historian đầy đủ hơn: partition, aggregate, downsampling.
+  - Trend: live, historical range, multi-tag, zoom/pan, CSV export.
+  - Alarm history và standing alarm report.
+  - Project publish/rollback đơn giản.
+
+  21.3 MVP-C — Safe Command + Security hardening
+
+  - Safe command dispatcher với lifecycle đầy đủ.
+  - Readback verification và command timeout semantics.
+  - Momentary command với server-side OFF.
+  - Audit command đầy đủ.
+  - RBAC area-based, tiến tới tag-level.
+  - SQLite durable spool và backfill.
+  - Backup/restore đầy đủ hơn.
+
+  21.4 V1 Production
+
+  - Cài được trên Windows, Linux và Docker.
+  - OPC UA production-ready nếu chưa hoàn tất ở phase trước.
+  - Soak test 72 giờ.
+  - Không mất alarm hoặc command event trong các fault scenario đã xác định.
+  - Release có SBOM, hash và chữ ký.
+  - Có install, operation, hardening và recovery documentation.
+  - Automated restore test trước khi release.
+
+  21.5 Thứ tự build đề xuất
+
+  1. Domain model: TagDefinition, TagSample, Quality, DeviceDefinition.
+  2. Simulator driver, test 2.000 tags.
+  3. Runtime latest-value cache: snapshot, delta, sequence, stale.
+  4. Web realtime viewer: SignalR, bảng tag, chưa có designer.
+  5. Modbus TCP driver: read coils/registers, address mapping, batch read.
+  6. Basic alarm: high/low/digital, alarm state, alarm events.
+  7. Historian simple: batch write, query latest/range.
+  8. Basic HMI runtime: scene JSON, widget cố định, binding.
+  9. Simple designer: add/move/resize/configure widget.
+  10. Publish/rollback.
+  11. Command/write engine.
+  12. Security hardening.
+  13. Backup/restore.
+
+  ---
+  22. Các rủi ro kỹ thuật lớn nhất
+
+  Screen designer
+
+  Đây có thể trở thành phần tốn thời gian nhất. Cần giới hạn:
+
+  - Số widget.
+  - Không raw SVG import.
+  - Không arbitrary scripting.
+  - Không responsive layout quá phức tạp.
+  - Không cố xây Figma cho công nghiệp.
+
+  Driver reliability
+
+  Đọc được giá trị không đồng nghĩa production-ready. Driver phải xử lý:
+
+  - Reconnect.
+  - Timeout.
+  - Malformed response.
+  - Firmware khác nhau.
+  - Partial read.
+  - Certificate.
+  - Session expiry.
+  - Duplicate/out-of-order updates.
+
+  Command ambiguity
+
+  Write timeout có thể tạo trạng thái “không biết PLC đã thực hiện hay chưa”. Cần command ID, readback và không retry mù.
+
+  Alarm complexity
+
+  Alarm không chỉ là threshold. State, acknowledgement, shelving, suppression và quality phải được mô hình hóa từ đầu, nếu không sau này rất khó sửa schema.
+
+  Blazor rendering
+
+  Màn hình SVG dày có thể gây nhiều render diff. Giảm rủi ro bằng:
+
+  - Batch updates 100–250 ms.
+  - Chỉ subscribe tag đang hiển thị.
+  - JS module cập nhật trực tiếp SVG attribute khi cần.
+  - Dedicated telemetry hub sau benchmark.
+
+  Scope expansion
+
+  Các tính năng cần chủ động loại khỏi MVP:
+
+  - HA.
+  - Fleet.
+  - Reports.
+  - Recipes.
+  - MES.
+  - 20 drivers.
+  - Cloud.
+  - Marketplace.
+  - Mobile native.
+  - AI.
+
+  ---
+  23. Tóm tắt dự án trong một trang
+
+  Tên loại sản phẩm: Lightweight Web SCADA/HMI
+  Nền tảng: latest .NET LTS, ASP.NET Core, Blazor
+  Mô hình: Local-first, edge/on-premise
+  Người dùng: Operator, supervisor, engineer, administrator, auditor
+  Driver MVP-A: Simulator, Modbus TCP. OPC UA đưa vào phase sau hoặc song song.
+  Database: PostgreSQL + SQLite spool (spool ở phase sau)
+  UI: Browser HMI trước, SVG drag-drop designer tối giản rồi mở rộng dần
+  Realtime: SignalR, HMI runtime hybrid với JS module cập nhật SVG
+  Chức năng chính: Tag engine, alarm, historian, trend, safe writes, RBAC, audit, backup/restore
+  Quy mô mục tiêu: 2.000 tags, 20 clients, 1.000 historian samples/s
+  Deployment: Windows Service, Linux systemd, Docker Compose
+  Ranh giới: Không hard real-time, không safety control, không cloud bắt buộc
+  Thời gian MVP-A (read/giám sát cơ bản): khoảng 4–6 tháng với 1–2 developer.
+  Thời gian đạt đầy đủ toàn bộ tài liệu này: khoảng 12–24 tháng tùy mức production hardening.
+  Thách thức lớn nhất: Designer, driver reliability, command safety, alarm semantics và production hardening.
