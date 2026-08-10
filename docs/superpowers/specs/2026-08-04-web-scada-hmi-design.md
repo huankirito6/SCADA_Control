@@ -108,7 +108,7 @@ Hệ quả trực tiếp: **không cần** phân tán, HA, sharding, message bro
 │  · Alarm engine                                             │
 │  · Command executor + write policy envelope                 │
 │  · GHI: historian.db + audit-của-Runtime                     │
-│  · ĐỌC query_only: config                                    │
+│  · PULL config artifact qua authenticated config feed         │
 └───────────┬─────────────────────────────────────────────────┘
             │ Mạng điều khiển (chỉ process này có)
         [ PLC / thiết bị Modbus / OPC UA server ]
@@ -140,7 +140,7 @@ Nên: **hai chain độc lập, mỗi chain một writer duy nhất, mỗi chain
 
 | File | Writer duy nhất | Reader | Cách reader truy cập |
 |---|---|---|---|
-| `config.db` | **Web** | Runtime | Mở `query_only=1` |
+| `config.db` | **Web** | Runtime | Không mở file; pull immutable artifact/published pointer qua authenticated config feed, cache active artifact cục bộ |
 | `audit-web.db` | **Web** | — | Chain riêng, `audit verify` kiểm độc lập |
 | `historian.db` + `audit-runtime.db` | **Runtime** | Web | **Không mở file.** Query qua RPC |
 | `alarms.db` | **Runtime** | Web | **Không mở file.** Snapshot/cursor/query qua RPC |
@@ -151,11 +151,11 @@ Vì sao Web ghi `config.db`: engineer phải sửa được cấu hình **khi Ru
 
 Vì sao Web **không** mở `historian.db`:
 
-- `mode=ro` **không recover được WAL**. Runtime crash để lại WAL cần replay → reader read-only trả `SQLITE_READONLY_RECOVERY` và không đọc được gì. Đây không phải trường hợp hiếm, đó là đúng lúc bạn cần đọc lịch sử nhất.
-- WAL **bắt buộc reader phải ghi được** `-shm` và `-wal`. "ACL read-only + WAL" vốn không chạy được, nên "cưỡng chế Web read-only bằng quyền file" là ảo tưởng ngay từ đầu.
+- SQLite từ 3.22 có thể mở WAL read-only khi `-wal`/`-shm` đã tồn tại, directory cho phép tạo chúng, hoặc DB được mở immutable; vì vậy read-only WAL không bị cấm tuyệt đối. Tuy nhiên các điều kiện đó không tạo ownership boundary ổn định sau crash/rotation và không phù hợp với ACL/process isolation cần có ở đây.
+- Reader WAL thông thường cần truy cập `-shm`/`-wal`; biến quyền file thành security boundary độc lập là không đủ và khác nhau theo trạng thái WAL/platform.
 - Trong Docker Compose, hai container **không** share được DB file một cách đáng tin. Đây là phương án duy nhất sống ở cả 3 target của mục tiêu 6.
 
-Các file được join ở **tầng repository**, không ở tầng SQL. Không có `ATTACH` xuyên các file này trong code nghiệp vụ. (`ATTACH` chỉ dùng bên trong `historian.db` để ghép các file partition theo tuần — §7.8.)
+Các store được join ở **tầng repository**, không ở tầng SQL. Không có `ATTACH` xuyên store trong code nghiệp vụ. Historian cũng mở/query partition theo bounded batch rồi merge seed/decomposable aggregate ở repository; không `ATTACH` toàn retention range (§7.8).
 
 ### 4.5. Solution layout
 
@@ -282,7 +282,7 @@ Bảy trạng thái connection: `Disabled · Connecting · Online · Degraded ·
 
 ### 6.5. Driver trong phạm vi
 
-Simulator (slice đầu, để làm mọi việc khác không cần hardware) → Modbus TCP → Modbus RTU/RS-485 → OPC UA.
+Simulator ở Task 13 (để các task sau không cần hardware) → Modbus TCP Task 20 → Modbus RTU/RS-485 Task 30 → OPC UA Task 31.
 
 Modbus RTU nằm trong phạm vi và **không** bị bỏ. Nó là giao thức phổ biến nhất ở tầng thiết bị, và nó là lý do tồn tại của §6.2, §6.3, và §11.1.
 
@@ -326,18 +326,18 @@ Mỗi tag cần **max store rate** để một tín hiệu nhiễu không tự m
 
 **Heartbeat là ràng buộc bắt buộc của mô hình đọc, không phải tiện lợi.** Không có nó, một tag bool giữ nguyên lâu dài biến truy vấn as-of thành full scan ngược. Điều này liên kết §7.3 với §7.5: heartbeat là thứ bound truy vấn seed.
 
-### 7.4. Quality không bao giờ được coerce — luật an toàn
+### 7.4. Quality không bao giờ được coerce — operational integrity fail-visible
 
 Quality Bad / Stale / thiếu dữ liệu phải trả sentinel **`Invalid`**, và `Invalid` phải **poison** toàn bộ biểu thức chứa nó, giống NULL trong SQL.
 
-Lý do, cụ thể: `temp > 100` với `temp` quality Bad, nếu coerce về 0, trả `false`. Alarm **im lặng**. Màn hình trông bình thường. Đó là cách một HMI giết người.
+Lý do, cụ thể: `temp > 100` với `temp` quality Bad, nếu coerce về 0, trả `false`; alarm có thể im lặng và màn hình trông bình thường. Đây là hành vi vận hành không chấp nhận được ở lớp supervisory. Nó không thay thế interlock/protection độc lập trong PLC hoặc hardwired (§1.1).
 
 Kèm hai cơ chế bắt buộc:
 
 - **`onInvalid` khai báo per-binding** — mỗi binding phải nói rõ nó làm gì khi dữ liệu chết (hatch pattern, dấu ?, giữ giá trị cuối kèm dấu hiệu stale). Không có mặc định im lặng.
 - **Chỉ báo cấp màn hình "N/300 tag invalid"** luôn hiển thị.
 
-**Luật, viết ra để không bị lách: không bao giờ để một màn hình trông bình thường khi dữ liệu của nó đã chết.**
+**Luật operational-integrity:** không bao giờ để một màn hình trông bình thường khi dữ liệu không còn đáng tin; mọi protection hazard vẫn thuộc safety layer độc lập (§1.1).
 
 Runtime là nguồn duy nhất chuyển tag sang `Stale`, dùng monotonic/logical clock. Mỗi tag published bắt buộc khai báo `StaleAfterMs`; validator bắt buộc:
 
@@ -417,7 +417,7 @@ CREATE TABLE sample (
 
 ### 7.8. Retention bằng nhiều file, không bằng DELETE
 
-SQLite không có partition. Làm partition ở **tầng repository**: một file mỗi tuần, `ATTACH` các file trong khoảng truy vấn, retention = **xoá file**, O(1).
+SQLite không có partition. Làm partition ở **tầng repository**: một file mỗi tuần; query mở số partition bị chặn theo batch, merge seed và decomposable aggregate ở repository, tuyệt đối không `ATTACH` toàn retention range. Retention = **xoá file** O(1), nhưng chỉ xoá partition đóng không còn pin/refcount từ reader.
 
 `DELETE` + `VACUUM` trên bảng vài chục triệu hàng biến mỗi lần retention thành một lần hệ thống đứng. Không làm từ đầu thì ngày thứ 31 là lần đầu bạn phát hiện điều đó — trên máy khách.
 
@@ -427,13 +427,13 @@ SQLite không có partition. Làm partition ở **tầng repository**: một fil
 
 ### 8.1. Config là version bất biến; activation là state machine
 
-Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** kèm **canonical hash**. Runtime **pull** version, không nhận push.
+Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** kèm **canonical hash**. Runtime không mở `config.db`: nó **pull** published pointer và immutable artifact qua authenticated config feed do Web sở hữu, verify canonical hash/signature, rồi cache active artifact cục bộ. Notification chỉ là fast path; feed polling là correctness path.
 
 Điều này loại bỏ RPC push-config và cả một class bug đồng bộ. Nhưng nó cần bốn thứ để đúng:
 
 **Canonical JSON phải được định nghĩa, không phải giả định.** "Hash của JSON" là vô định nghĩa cho tới khi chốt: thứ tự khoá, cách round-trip float, encoding, và **có gồm `schemaVersion` hay không**. Không chốt thì hash khác nhau giữa hai máy hoặc hai culture và signature vô dụng. Bảo vệ bằng **property test chạy trên nhiều culture** (`tr-TR` là culture làm vỡ code so sánh chuỗi).
 
-**`ReloadConfig` không được là điểm đơn nhất.** Web publish rồi crash trước khi gọi được → Runtime kẹt ở version cũ vĩnh viễn. Nên Runtime **cũng poll** một con trỏ `latest_published_version` một hàng. RPC là đường nhanh; poll là đường đúng.
+**`ReloadConfig` không được là điểm đơn nhất.** Web publish rồi crash trước khi notify → Runtime không được kẹt ở version cũ. Runtime poll published pointer qua config-feed contract; notification là đường nhanh, authenticated feed poll là đường đúng. Docker dùng DB volume tách biệt và không mount `config.db` vào Runtime.
 
 Minimal immutable config/publish/activation thuộc **foundation**, trước scan-budget validation và trước mọi hardware. Mỗi activation có `activation_id` riêng và state `Desired → Validating → Preparing → Active | ActiveDegraded | Rejected`. Schema/hash/physical-envelope validation là all-or-nothing trước atomic active-pointer switch; lỗi connectivity không làm config invalid mà tạo `ActiveDegraded` cùng `tag_load_status` per resource. RPC reload là fast path, poll con trỏ published là correctness path.
 
@@ -527,9 +527,9 @@ On-premise với admin có OS root: **non-repudiation là bất khả thi. Khôn
 Điều đạt được là **tamper-evidence**. Chốt mức **L2 + L3**:
 
 - **L2 — hash chain.** Mỗi audit event chứa hash của event trước. Sửa hay xoá một event làm vỡ chain từ đó về sau, và `audit verify` chỉ ra chính xác vị trí. **Hai chain độc lập, mỗi chain một writer duy nhất** (§4.4) — dùng chung một chain cho hai process là một cuộc đua giành `prev_hash`, và nó vỡ dưới tải nên test đơn lẻ sẽ không thấy.
-- **L3 — seal định kỳ.** Chain head được đẩy ra sink ngoài (file trên máy khác, in ra, hay một append-only endpoint). Không có L3, admin có thể rebuild toàn bộ chain. Seal **cả hai** chain head.
+- **L3 — seal có cadence khóa.** Seal cả hai chain head sau tối đa **100 event hoặc 60 giây**, tùy điều kiện nào đến trước; boot, shutdown sạch và policy/key rotation buộc seal ngay. Signing key nằm trong OS-protected/non-exportable store dưới identity `AuditSealer` tách khỏi Web/Runtime; private key không vào diagnostic/backup thường. Sink là append-only ngoài application ACL. Quá 120 giây không có seal thành overdue: raise system alarm, health degraded và command/publish mutation fail-closed cho tới khi seal thành công. Rotation tạo transition record được ký bởi khóa cũ và mới; giữ key ID/public trust history để verify dữ liệu cũ. Mất khóa bắt đầu chain epoch mới qua local administrator recovery ceremony và tạo discontinuity rõ ràng; không được giả vờ nối cryptographic continuity.
 
-**Hash chain phải được dùng từ slice đầu**, cho login / config publish / service start-stop / load error. Slice làm lệnh khi đó chỉ **thêm một loại event** vào một log đã được chứng minh, thay vì phải migrate genesis của chain trên dữ liệu production.
+**Hash chain phải có từ Task 9**, trước login/config publish/service start-stop/load-error production. Task 21 chỉ **thêm loại command event** vào log đã được chứng minh, không migrate genesis trên dữ liệu production.
 
 Mỗi event mang `runtime_instance_id` và `boot_id`, cùng cặp timestamp wall + monotonic (§7.6).
 
@@ -537,7 +537,7 @@ Ship CLI **`audit verify`**. Nó vừa là control an ninh vừa là thứ bán 
 
 **Một giới hạn phải nói ra:** hai chain độc lập nghĩa là **thứ tự giữa hai chain không được bảo vệ bằng mật mã**. Một admin có thể xoá cả một đoạn cuối của `audit-runtime.db` và chain còn lại vẫn hợp lệ. Đây là lý do L3 tồn tại — seal head định kỳ là thứ duy nhất phát hiện việc chặt đuôi (truncation) một chain, và điều đó đúng cho cả trường hợp một chain.
 
-Tài liệu sản phẩm phải viết đúng câu này: **"tamper-evident, không tamper-proof; trước một host administrator, chúng tôi phát hiện, chúng tôi không ngăn chặn."** Điều này khớp IEC 62443 SR 2.8/2.9 và là điều duy nhất trung thực nói được.
+Tài liệu sản phẩm phải viết đúng câu này: **"tamper-evident, không tamper-proof; trước một host administrator, chúng tôi phát hiện, chúng tôi không ngăn chặn."** Đây chỉ là **design intent hỗ trợ một phần** các mục tiêu security liên quan; chưa có applicability mapping, evidence hay independent conformance decision nên không claim khớp clause, compliance hoặc certification IEC 62443.
 
 ### 9.3. Write policy envelope — chuỗi tấn công vượt qua mọi thứ khác
 
@@ -561,7 +561,7 @@ raw/engineering range + write mode + max rate/pulse
 
 **Runtime re-validate khi load.** Không tin validate của Web, vì Web là bên có thể bị chiếm.
 
-Mặc định của envelope trong slice đầu: **writes disabled globally.**
+Mặc định của envelope từ Task 11 và trước khi mở write path: **writes disabled globally.**
 
 ### 9.4. Ba lỗ nhỏ hơn nhưng thật
 
@@ -602,7 +602,7 @@ Kèm: alarm "comm fail" ở cấp cha **suppress** alarm của các tag con.
 
 Alarm event log có durability riêng và nằm trong **`alarms.db`**, tách khỏi historian/audit. Runtime là single writer; Web chỉ query qua RPC bằng snapshot + cursor/idempotent events. Alarm queue không chia sẻ overflow policy với sample queue.
 
-**Alarm là kênh dữ liệu thứ ba** (bên cạnh telemetry và command). Kênh này phải được **reserve trong transport ngay bây giờ**, dù engine làm sau — nếu không, slice làm alarm sẽ viết lại transport.
+**Alarm là kênh dữ liệu thứ ba** (bên cạnh telemetry và command). Contract boundary Task 12 phải dành channel/versioning hook trước khi Task 27–28 thêm engine và transport, để không viết lại IPC boundary.
 
 Blink là **CSS animation**, không bao giờ là JS timer per element. 50 alarm nhấp nháy bằng 50 timer là một cách làm treo tab.
 
@@ -696,9 +696,9 @@ link   { fromRef, toRef, routing }  // hình học DẪN XUẤT
 
 Bbox của group là **dẫn xuất, không bao giờ lưu**.
 
-**`kind: "instance"` + `tagScope` phải được reserve trong schema NGAY BÂY GIỜ.** Không có nó, "symbol tái sử dụng" chỉ là copy-paste, và phần lớn giá trị của mục tiêu 3 mất. Thêm sau nghĩa là migrate mọi file scene đã có.
+**`kind: "instance"` + `tagScope` phải có reserved representation trong schema Task 6.** Không có nó, "symbol tái sử dụng" chỉ là copy-paste, và phần lớn giá trị của mục tiêu 3 mất. Thêm sau nghĩa là migrate mọi file scene đã có.
 
-**Dữ liệu điểm của trend KHÔNG được nằm trong Scene JSON.** Scene JSON được persist, version, và undo — nhúng một stream vào đó biến mỗi frame thành một document change, làm nổ log JSON-Patch, và làm golden test không deterministic. Trend renderer cần decimation riêng: 6h @1s = 21.600 điểm không được đi vào một chuỗi `<polyline points="…">`. Cần **từ slice đầu tiên có trend**, vì slice đó đã vẽ trend.
+**Dữ liệu điểm của trend KHÔNG được nằm trong Scene JSON.** Scene JSON được persist, version, và undo — nhúng một stream vào đó biến mỗi frame thành một document change, làm nổ log JSON-Patch, và làm golden test không deterministic. Trend renderer Task 28 dùng decimation riêng: 6h @1s = 21.600 điểm không được đi vào một chuỗi `<polyline points="…">`.
 
 **Migration là forward-only pure function và không bao giờ được sửa sau khi release.** Bảo vệ bằng **golden corpus**: một file scene cho mỗi schema version đã release. `widgetType` lạ → **hard reject**. Style prop lạ → giữ lại + warning. **`SchemaVersion` và `Revision` là hai thứ khác nhau**, không được gộp.
 
@@ -716,13 +716,13 @@ T2 có bốn tính chất mà expression **không** có: serializable, phân tí
 
 Bỏ T3 xoá luôn cả cụm: AST validation, whitelist hàm, giới hạn độ sâu, compile + cache, trích xuất dependency, **cycle detection**, execution budget, và UI soạn expression.
 
-Schema phải **reserve slot** cho tier binding ngay bây giờ, để mở T3 sau không thành migration.
+Schema Task 6 phải **reserve slot** cho tier binding để mở T3 sau không thành migration.
 
 Ba luật kèm theo:
 
 - **Cấm reference element→element.** Graph trở thành bipartite (tag → element), nên **cycle detection biến mất hoàn toàn** và mọi thứ gom về CSR adjacency + một dirty set per frame. Giá trị dẫn xuất thuộc về Runtime dưới dạng calculated tag — đúng nơi của nó, vì nó cần được historian và alarm nhìn thấy.
 
-  Cần nói rõ hệ quả để không tạo lỗ: calculated tag **chưa được build** (§13 nhóm C), nên trong các slice đầu, một use case cần giá trị dẫn xuất sẽ **không có chỗ nào để đặt nó**. Đây là đánh đổi có chủ ý, không phải sơ suất — nó là cách bắt buộc use case đó phải xuất hiện thật trước khi ta xây engine cho nó. Cách xử lý tạm cho tới khi có calculated tag: giá trị dẫn xuất được tính **ở PLC** (nơi nó thường vốn đã có), hoặc use case bị hoãn. **Tuyệt đối không** mở lại reference element→element như đường tránh — làm vậy là lấy lại toàn bộ cycle detection đã xoá, và lấy nó lại ở đúng chỗ khó nhất.
+  Cần nói rõ hệ quả để không tạo lỗ: calculated tag **nằm ngoài MVP hiện tại** (§13 nhóm C), nên use case cần giá trị dẫn xuất phải tính **ở PLC** (nơi nó thường vốn đã có) hoặc bị hoãn cho tới một task được phê duyệt riêng. **Tuyệt đối không** mở lại reference element→element như đường tránh — làm vậy lấy lại toàn bộ cycle detection đã xoá ở đúng chỗ khó nhất.
 - **"Referenced nhưng chưa subscribe" phải là bug lúc mount, không phải điều kiện runtime** — tập subscription được **dẫn xuất** từ scene. Và tag của element đang ẩn **vẫn phải subscribe**, nếu không mỗi lần đổi tab là một subscribe-storm.
 - **Two-way binding không phải binding** — ghi là một **lệnh** (§8). Cái bẫy thật là **optimistic echo**: khi một field đang có focus hoặc đang có write pending, telemetry **không được** ghi đè nó. Không có luật này, operator gõ số vào ô rồi thấy nó bị nhảy về giá trị cũ.
 
@@ -736,7 +736,7 @@ Ba luật kèm theo:
 
 **Payload encoding.** Index-based `[idx, value, qualityByte]` ≈ 10 byte, so với ~60 byte cho dạng có tên. MessagePack giảm thêm ~40%.
 
-**Số node SVG, không phải số attribute.** Chrome bắt đầu đau trên ~5.000 node. 300 element × ~10 node = 3.000 — **đã gần trần mà không nhận ra**. Nên: **budget cứng + counter**, để phát hiện ở slice 2 chứ không phải ở máy khách.
+**Số node SVG, không phải số attribute.** Chrome bắt đầu đau trên ~5.000 node. 300 element × ~10 node = 3.000 — **đã gần trần mà không nhận ra**. Nên Task 18 thêm **budget cứng + counter**, và Task 29 khóa load gate trước release thay vì phát hiện ở máy khách.
 
 **Text đắt hơn `fill` 10–50×.** Nên **tối ưu giá trị cao nhất trong toàn hệ thống là format-then-compare dedup** bên trong `applyValues`: format giá trị, so với chuỗi đã render, bỏ qua nếu giống. Cắt 60–90% lượng ghi DOM. Nó rẻ và nó là thứ duy nhất trong danh sách này đáng làm sớm.
 
@@ -773,7 +773,7 @@ Prerender: quy tắc double-mount phải rõ, hoặc JS module init hai lần.
 - **Canvas cố định + uniform scale-to-fit + letterbox.** Không responsive reflow: một sơ đồ P&ID reflow là một sơ đồ sai.
 - **Cảm ứng là mặc định, không phải bổ sung.** Panel PC là màn hình cảm ứng: target ~44px, không có affordance chỉ-hover, dùng Pointer Events. Retrofit cảm ứng nghĩa là viết lại state machine của gesture.
 - **Ngôn ngữ thị giác thống nhất cho quality/staleness và transport disconnect** tuân theo state matrix §7.4: Runtime tính Stale theo công thức đã khóa; browser chỉ thêm `RuntimeDisconnected`; mọi trạng thái không tin cậy đều có non-color cue, age, invalid count và khóa command.
-- **Screen inspector** trong L2 từ slice 1 — rẻ lúc đó, đắt khi retrofit.
+- **Screen inspector** là deliverable bắt buộc của renderer foundation Task 18 — rẻ ở gate đó, đắt khi retrofit.
 
 ### 11.7. Editor
 
@@ -808,7 +808,7 @@ Ví dụ tiêu chí rỗng và bản sửa:
 | Rỗng | Đo được |
 |---|---|
 | "8h không tăng memory" | RSS tăng < 5% sau 8h, đo qua `System.*`, so đầu/cuối |
-| "gap hiển thị rõ ràng" | Kiểm bằng canonical serialization của scene, không bằng mắt |
+| "gap hiển thị rõ ràng" | Kiểm semantic render state + accessibility tree + trend render model bằng Vitest/Playwright, không chỉ bằng mắt hoặc canonical Scene bytes |
 | "resync không hở sequence" | **Convergence** < 2.000 ms sau resync (§7.1) |
 | "round-trip float" | Test cụ thể `-12345.678` và `1.2345678e-8` — giá trị đối xứng byte pass giả |
 | "1.000 sample/s" | **Có reader song song** — xem dưới |
@@ -827,7 +827,7 @@ Ba test bắt buộc, mỗi cái nhắm một giả định có thể sai:
 
 Bốn vòng rà soát sinh ra ~40 thay đổi. **Áp dụng cả 40 chính là chế độ chết mà chúng vừa cảnh báo.** Phân loại:
 
-### Nhóm A — Vào slice 0/1 (retrofit đắt 3–10×)
+### Nhóm A — Foundation/hard gate trước subsystem phụ thuộc
 
 Auth + `[Authorize]` fallback toàn cục · envelope principal trong mọi RPC · transport có xác thực ngay · audit hash chain dùng ngay cho login/publish/start-stop/load-error · schema command journal · field `writeable` + area RBAC trong config schema từ version publish đầu tiên · write policy envelope mặc định writes-disabled · single-instance lock · `setCamera` + `applyStructural` · quality severity/reason fields · logical `ts_us` + monotonic/boot metadata · deadband so giá trị đã lưu · subscription generation/epoch/watermark · scan group + coalescing trong schema.
 
@@ -835,9 +835,9 @@ Auth + `[Authorize]` fallback toàn cục · envelope principal trong mọi RPC 
 
 Telemetry latest-value/convergence · historian no-silent-loss · audit/command fail-closed · `Invalid` poison, không coerce · resize mutate geometry, không tích luỹ scale · editor không mutate DOM của L2 · cấm reference element→element · alarm không kích khi quality Bad · lệnh luôn absolute set-value · tier 2 không bao giờ gọi `Verified` · latest-value-wins per frame · không bao giờ để màn hình trông bình thường khi dữ liệu đã chết · **không bao giờ hướng dẫn "copy file này"** để backup · zero-CDN cưỡng chế bằng CSP không `unsafe-inline` + CI grep `https?://` + container `--network none` smoke test coi console error là fail.
 
-### Nhóm C — Reserve slot, build sau
+### Nhóm C — Reserved contract hoặc deferred scope có task/gate riêng
 
-T3 expression · `kind:"instance"` + `tagScope` · rotation/group trong schema · retention multi-file ATTACH · alarm là kênh dữ liệu thứ ba · PostgreSQL · calculated tag.
+T3 expression · PostgreSQL · calculated tag là deferred scope cần task/gate riêng trước khi build. `kind:"instance"` + `tagScope` và rotation/group được reserve trong schema Task 6; historian multi-file dùng bounded partition query Task 16; alarm channel contract được reserve ở Task 12 và hiện thực ở Tasks 27–28.
 
 ### Nhóm D — Cắt tường minh
 
@@ -857,7 +857,7 @@ T3 expression · `kind:"instance"` + `tagScope` · rotation/group trong schema �
 
 **SQLite trên đường mạng.** SMB/NFS/UNC làm **corrupt** DB, và bind mount của Docker Desktop Windows làm WAL không đáng tin. Nên: **refuse to start nếu DB nằm trên đường mạng**, kiểm lúc khởi động. Và **không bao giờ** tài liệu hoá "copy file này để backup" — copy một WAL đang sống cho ra file invalid. Ship backup command dùng `VACUUM INTO` / `.backup`.
 
-**Data Protection key.** Ephemeral với Windows Service (không load user profile), không mã hoá trên Linux, mất mỗi lần container start. Key không được persist nghĩa là cookie forge được → **bypass login**. Nên cấu hình `PersistKeysToFileSystem` + `ProtectKeysWith*` theo từng nền tảng, và kiểm lúc khởi động.
+**Data Protection key.** Key có thể ephemeral với Windows Service (không load user profile), không được protect-at-rest đúng cách trên Linux, hoặc mất mỗi lần container start. Mất key thường làm cookie cũ không giải mã được và buộc đăng nhập lại; nó không tự làm cookie forgeable. Persistence và protection-at-rest là hai gate riêng: cấu hình `PersistKeysToFileSystem` + `ProtectKeysWith*` theo từng nền tảng, kiểm quyền/khả năng decrypt lúc khởi động và audit key-ring rotation.
 
 **Certificate.** Self-signed dạy operator bấm qua cảnh báo — thói quen đó là lỗ an ninh thật. Nên: sinh cert lúc first-run, **export root CA** để import vào máy client, và **đưa IP vào SAN** vì người ta sẽ browse bằng IP trần. Cẩn thận HSTS: bật sai sẽ khoá bạn ra khỏi một appliance LAN không sửa được từ xa.
 
@@ -871,7 +871,7 @@ Single-instance lock để chặn concurrent writer. Backup command. CLI: `audit
 
 ## 15. Thứ tự triển khai
 
-Thứ tự chuẩn là **risk-first, không phải value-first** và được định nghĩa duy nhất trong `docs/superpowers/plans/2026-08-09-web-scada-hmi-risk-first-implementation-plan.md`. Bảng slice lịch sử dưới đây đã bị thay thế: minimal immutable publish/activation nằm trong foundation; process split là gate trước hardware; physical policy + capability + durable intent là gate trước write.
+Thứ tự chuẩn là **risk-first, không phải value-first** và được định nghĩa duy nhất trong `docs/superpowers/plans/2026-08-09-web-scada-hmi-risk-first-implementation-plan.md`. Mọi timing marker lịch sử đã bị thay thế bằng task/hard gate: minimal immutable publish/activation nằm trong foundation; process split là gate trước hardware; physical policy + capability + durable intent là gate trước write.
 
 Các hard gate theo thứ tự là:
 
@@ -900,7 +900,7 @@ Ba hạng mục bị đánh giá thấp nhất, theo thứ tự: **editor** → 
 
 **Khúc giữa dài không có thưởng.** Phần lớn thời gian là editor internals, config versioning, deployment plumbing — giai đoạn mà demo không đẹp thêm được gì. Cơ chế cụ thể: một lần bỏ 3 tuần vì việc chính → mất context → chi phí quay lại *cảm giác* rất cao → pause vô thời hạn.
 
-**Scope identity drift.** "R&D → startup" tạo áp lực kiến trúc cho một tương lai giả định. Thiết kế này **đã có dấu hiệu đó**: hai implementation direct/gRPC và repository trên hai loại DB khi chưa có một user nào. §4.3 đặt điều kiện cho nó; nếu tới slice cuối vẫn không có nhu cầu thật, xoá.
+**Scope identity drift.** "R&D → startup" tạo áp lực kiến trúc cho một tương lai giả định. Thiết kế chỉ giữ một topology production: authenticated config/IPC feed và repository contracts; không có direct shared-DB implementation song song. Mọi abstraction ngoài envelope phải có gate/use case thật hoặc bị loại.
 
 Ba đối trọng, tất cả đều là hành động cụ thể:
 
@@ -928,7 +928,7 @@ Mỗi finding P0/P1 trong review ngày 2026-08-09 có một quyết định ADR 
 | P0-6 Quality algebra | Severity, reason flags, native status tách; aggregate masks riêng | ADR-0002 | 4, 16 | Exhaustive quality combinations + bucket-duration tests |
 | P0-7 Historian contradiction | No-silent-loss; stable accepted identity; persisted gap marker | ADR-0005 | 15–16, 29 | Overflow/retry/gap/high-water and load tests |
 | P0-8 Snapshot→delta handoff | Generation + epoch + snapshot watermark + serialized dirty mailbox | ADR-0006 | 17 | Snapshot race/overflow/resync FSM tests |
-| P0-9 Stale/offline | Runtime stale formula; disconnected state riêng; invalid disables command | ADR-0002, ADR-0006 | 17, 19 | Fake-clock stale + validity/accessibility E2E matrix |
+| P0-9 Stale/offline | Runtime stale formula; disconnected state riêng; invalid disables command | ADR-0002, ADR-0006 | 14, 19 | Task 14 fake-clock lower/upper/exact-threshold, logical-clock, recovery/restart and deadband-bypass tests; Task 19 validity/accessibility E2E matrix |
 | P0-10 Activation/order | Minimal publish foundation; activation FSM; atomic switch | ADR-0003 | 8, 23 | Activation crash/rollback/reconciliation state-machine tests |
 | P1-1 Clock model | Logical/ingest/source/monotonic/boot/revision + persisted high-water | ADR-0002 | 5 | Clock-step/restart/out-of-order source-time tests |
 | P1-2 Scene L1 authority | JSON Schema/manifest; generated C#/TS; server canonical hash | ADR-0006 | 6 | Shared cross-language conformance corpus |
@@ -937,11 +937,11 @@ Mỗi finding P0/P1 trong review ngày 2026-08-09 có một quyết định ADR 
 | P1-5 Alarm/trend transport | Snapshot/cursor/idempotent event/backfill/invalid-gap contract | ADR-0006 | 27–28 | Reconnect/backfill and render-state tests |
 | P1-6 Historian partition | Bounded partition batches, repository merge, retention pin/refcount | ADR-0005 | 16 | Long-range > attach-limit and concurrent-retention tests |
 | P1-7 Migration ownership | Mỗi writer migrate store của mình; CLI offline orchestration | ADR-0003, ADR-0005 | 7 | Wrong-owner ACL + statement-boundary crash tests |
-| P1-8 Audit L3 | Canonical chain metadata + signed external head seal | ADR-0004 | 9 | Modify/delete/reorder/truncate/seal-outage fixtures |
-| P1-9 Backup/restore | Coordinated causal cut, signed bounded package, atomic restore | ADR-0003, ADR-0005 | 32 | Crash/malicious archive/signature/compatibility tests |
+| P1-8 Audit L3 | Canonical chain metadata; 100-event/60-second forced seals; separate OS-protected sealer key, rotation/recovery; append-only sink; overdue fail-closed | ADR-0004 | 9 | Fake-clock cadence/boundary/forced seal, key ACL/rotation/loss, sink outage/overdue, truncate/tamper fixtures |
+| P1-9 Backup/restore | Coordinated causal cut; site backup-signing key custody/rotation/recovery/trust history; bounded package; atomic restore | ADR-0003, ADR-0005 | 32 | Key ACL/rotation/loss/trust-history plus crash/malicious archive/signature/compatibility tests |
 | P1-10 Driver contract | Cancellation/deadline/capability/partial result/native status/arbitration | ADR-0001 | 13–14 | Driver conformance + cancellation/arbitration tests |
 | P1-11 OT device security | OPC UA signed+encrypted/trustlist; Modbus zone/conduit/ACL | ADR-0001, ADR-0004 | 20, 31, 33 | Insecure-profile rejection + deployment network tests |
-| P1-12 RBAC | Deny default, bootstrap/break-glass/revocation/service/stale-circuit | ADR-0004 | 10, 22 | Permission matrix + endpoint-time revocation tests |
+| P1-12 RBAC | Deny default; local bootstrap/recovery; **no break-glass bypass**; revocation/service/stale-circuit rules | ADR-0004 | 10, 22 | Permission matrix asserts no bypass token/path; local recovery keeps writes disabled; endpoint-time revocation tests |
 | P1-13 Editor state | JS-owned optimistic concurrency/round-trip/conflict/transaction FSM | ADR-0006 | 25–26 | Conflict/disconnect/undo transaction tests |
 | P1-14 Accessibility | Transformed target, keyboard/focus/name/non-color/reduced-motion/cancel | ADR-0006 | 18–19, 26 | Automated accessibility + pointer/keyboard E2E tests |
 | P1-15 Frontend performance | Pinned baseline and node/frame/queue/payload/heap/RSS/20-client budgets | ADR-0006 | 18, 29, 34 | Repeatable 20-client × 300-tag load gate |

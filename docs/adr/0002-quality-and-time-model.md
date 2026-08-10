@@ -28,5 +28,6 @@ Domain and wire representations require explicit conversion, but quality aggrega
 
 - Task 4: exhaustive quality-combination and semantic hash tests.
 - Task 5: backward/forward clock step, restart and persisted high-water tests.
-- Tasks 16–17: trend quality-duration and Runtime stale-transition tests.
+- Task 14: fake-clock Runtime stale-transition matrix covering lower/upper publish bounds, exact threshold, monotonic/logical advance, scan recovery, restart/boot behavior and quality-transition persistence bypassing deadband/store-rate.
+- Task 16: trend quality-duration tests.
 - Task 19: validity/accessibility state matrix and command-disable E2E tests.

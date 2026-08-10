@@ -396,21 +396,22 @@ git commit -m "feat: add immutable config activation state machine"
 - Create: `src/Scada.Infrastructure.Sqlite/Audit/AuditVerifier.cs`
 - Create: `src/Scada.Cli/Commands/AuditVerifyCommand.cs`
 - Test: `tests/Scada.SecurityTests/Audit/AuditTamperTests.cs`
+- Test: `tests/Scada.SecurityTests/Audit/AuditSealLifecycleTests.cs`
 
 **Produces:** SHA-256 chain with canonical event bytes, chain ID, monotonic sequence, genesis, previous hash, build/boot/runtime IDs and signed external head seal.
 
 - [ ] **Step 1: Write tamper/failure tests**
 
-Modify, delete, reorder and truncate events; replace genesis; roll back a DB; make seal sink unavailable; create cross-chain command causality. Expected verifier identifies exact break and never claims a cryptographic total order between chains.
+Modify, delete, reorder and truncate events; replace genesis; roll back a DB; create cross-chain command causality. With a fake clock, test seals at exactly 100 events or 60 seconds (whichever first), forced boot/clean-shutdown/policy/key-rotation seals, no early/late off-by-one, sink unavailable through the 120-second overdue boundary, recovery, key ACL denial, dual-signed rotation, retained public trust history and key-loss epoch discontinuity. Expected verifier identifies exact break and never claims a cryptographic total order between chains.
 
 - [ ] **Step 2: Implement durability profiles**
 
-Audit/command DB uses WAL + `synchronous=FULL`; append is one transaction. Seal sink writes signed head files to an operator-configured append-only directory outside application ACL; overdue seal raises a system alarm.
+Audit/command DB uses WAL + `synchronous=FULL`; append is one transaction. Seal sink writes signed head files to an operator-configured append-only directory outside application ACL. A separate `AuditSealer` identity reads the OS-protected/non-exportable key. Seal after at most 100 events or 60 seconds; boot, clean shutdown and policy/key rotation force a seal. At 120 seconds overdue, raise a system alarm, degrade health and fail closed command/publish mutations. Rotation is dual-signed and public trust history is retained; key loss starts an explicitly discontinuous epoch through local administrator recovery.
 
 - [ ] **Step 3: Verify**
 
-Run: `dotnet test tests/Scada.SecurityTests --filter AuditTamperTests; dotnet run --project src/Scada.Cli -- audit verify --fixture tests/fixtures/audit/valid`  
-Expected: PASS and exit code 0 for valid fixture; nonzero for each tampered fixture.
+Run: `dotnet test tests/Scada.SecurityTests --filter "AuditTamperTests|AuditSealLifecycleTests"; dotnet run --project src/Scada.Cli -- audit verify --fixture tests/fixtures/audit/valid`
+Expected: PASS for cadence/key/sink lifecycle; exit code 0 for valid fixture and nonzero for each tampered fixture.
 
 - [ ] **Step 4: Commit**
 
@@ -434,11 +435,11 @@ git commit -m "feat: add tamper-evident audit verification"
 
 - [ ] **Step 1: Write deny/replay tests**
 
-Cover missing permission, stale circuit, disabled user, expiry, replayed nonce, changed tag/value/hash/channel and revoked authorization snapshot.
+Cover missing permission, stale circuit, disabled user, expiry, replayed nonce, changed tag/value/hash/channel, revoked authorization snapshot, and assert no emergency role/header/token/path can bypass the permission matrix. Local account recovery must leave global writes disabled until normal identity, policy and sealer-health gates pass.
 
 - [ ] **Step 2: Implement bootstrap and revocation rules**
 
-No default password. First-run admin ceremony is local-only and expires after completion. Service accounts are non-interactive. Circuit/session authorization is rechecked at sensitive endpoint execution.
+No default password. First-run and account-recovery admin ceremonies are OS-local, audited and expire after completion. Service accounts are non-interactive. Circuit/session authorization is rechecked at sensitive endpoint execution. Product scope has no break-glass bypass; recovery creates/restores a normal administrator and never bypasses command policy.
 
 - [ ] **Step 3: Verify**
 
@@ -560,21 +561,22 @@ git commit -m "feat: define driver contract and simulator"
 - Create: `src/Scada.Runtime/Acquisition/TransportArbiter.cs`
 - Create: `src/Scada.Runtime/Acquisition/ScanBudgetValidator.cs`
 - Test: `tests/Scada.Runtime.Tests/Acquisition/ScanSchedulerTests.cs`
+- Test: `tests/Scada.Runtime.Tests/Acquisition/StaleTransitionTests.cs`
 
 **Produces:** register coalescing with max gap/max block, virtual-clock schedule, skip-and-count, logical-device breaker and physical-transport arbitration.
 
 - [ ] **Step 1: Write deterministic schedule tests**
 
-Prove no catch-up, p99 jitter calculation, one in-flight RTU request per bus, one bad slave not tripping other logical devices, command quota not starving scan and impossible 9600-baud config warning.
+Prove no catch-up, p99 jitter calculation, one in-flight RTU request per bus, one bad slave not tripping other logical devices, command quota not starving scan and impossible 9600-baud config warning. For stale behavior, use an injected fake monotonic/logical clock and cover publish rejection immediately below/above the formula bounds, acceptance at both bounds, no transition one tick before `StaleAfterMs`, transition at the exact threshold, large logical-clock advance, scan recovery to current quality, process restart with a new boot ID and persisted last-observation state, and no dependence on wall/source-clock steps.
 
 - [ ] **Step 2: Implement fixed scan groups**
 
-Planner validates structured addresses and uses protocol limits. `StaleAfterMs` publish validation follows the locked formula. Quality transition to Stale bypasses historian deadband/store-rate.
+Planner validates structured addresses and uses protocol limits. `StaleAfterMs` publish validation follows the locked formula. Runtime stale evaluation is driven only by the injected monotonic/logical clock. Quality transitions into and out of Stale are published and persisted as quality-only transitions that bypass historian deadband/store-rate.
 
 - [ ] **Step 3: Verify**
 
-Run: `dotnet test tests/Scada.Runtime.Tests --filter ScanSchedulerTests`  
-Expected: PASS and transport trace contains no catch-up burst.
+Run: `dotnet test tests/Scada.Runtime.Tests --filter "ScanSchedulerTests|StaleTransitionTests"`
+Expected: PASS; transport trace contains no catch-up burst and the complete fake-clock stale matrix passes.
 
 - [ ] **Step 4: Commit**
 
@@ -1180,11 +1182,11 @@ git commit -m "feat: add secure OPC UA driver"
 
 - [ ] **Step 1: Write adversarial package tests**
 
-Invalid signature, wrong release key, rollback version, zip-slip, symlink, decompression/file-count/size limits, missing DB/key, partial snapshot, chain-head mismatch and power cut at each restore/migration phase.
+Invalid signature, unknown/wrong site key, rollback version, zip-slip, symlink, decompression/file-count/size limits, missing DB/key, partial snapshot, chain-head mismatch and power cut at each restore/migration phase. Test OS ACL denial for non-backup identities, non-exportability where supported, dual-signed key rotation, old-package verification through retained public trust history, separate trust-set export/import, private-key loss/new epoch, and refusal to silently trust a replacement key.
 
 - [ ] **Step 2: Implement coordinated quiesce/snapshot**
 
-Do not copy live WAL files. Owners create SQLite backup snapshots and report causal checkpoints; coordinator writes manifest only after all snapshots verify. Restore remains offline until signature, schema, audit, policy and reconciliation checks pass.
+Do not copy live WAL files. Owners create SQLite backup snapshots and report causal checkpoints; coordinator writes manifest only after all snapshots verify. A commissioning-generated site backup-signing key is OS-protected/non-exportable and accessible only to the backup signer identity; private key material is excluded from package/diagnostics/ordinary backup. Manifests carry algorithm/key ID. Rotation is dual-signed with retained public trust history; disaster recovery exports the public trust set separately. Private-key loss requires audited local recovery and a new signing epoch. Restore remains offline until signature/trust, schema, audit, policy and reconciliation checks pass.
 
 - [ ] **Step 3: Verify**
 

@@ -14,7 +14,7 @@ A bounded queue can lose pre-acceptance samples, so unconditional historian loss
 2. Any loss before acceptance persists a gap/high-water marker and raises a system alarm. Candidate, accepted, persisted and gap counters are distinct. Disk/WAL/queue warnings precede exhaustion.
 3. Sample, alarm, audit and command queues are separate. Audit/command fail closed and use stronger durability than historian. Alarm events use their own durable profile.
 4. Runtime is the single writer of `alarms.db`; Web accesses alarm snapshot/cursor/query only through RPC.
-5. Historian uses time partitions, but long queries process a bounded number of partitions per batch and merge seed/decomposable aggregates in the repository. It never `ATTACH`es the whole retention range. Retention deletion requires pin/refcount protection against active readers.
+5. Historian uses one time-partition file per period. Long queries open/query a bounded number of partition files per batch and merge seed/decomposable aggregates in the repository. They never `ATTACH` the whole retention range. Retention deletion requires pin/refcount protection against active readers.
 6. `QueryTrend` carries as-of seed, min/max envelope, time-weighted decomposition and the quality fields from ADR-0002.
 7. Database migration follows writer ownership. Backup/restore follows the coordinated causal-cut rules in ADR-0003.
 
