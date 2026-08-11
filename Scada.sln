@@ -37,6 +37,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Scada.Web", "src\Scada.Web\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Scada.SecurityTests", "tests\Scada.SecurityTests\Scada.SecurityTests.csproj", "{E00998C2-F927-41A9-A87C-06AC74F9B9CD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Scada.TimeoutDescendantFixture", "tests\Scada.TimeoutDescendantFixture\Scada.TimeoutDescendantFixture.csproj", "{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -227,6 +229,18 @@ Global
 		{E00998C2-F927-41A9-A87C-06AC74F9B9CD}.Release|x64.Build.0 = Release|Any CPU
 		{E00998C2-F927-41A9-A87C-06AC74F9B9CD}.Release|x86.ActiveCfg = Release|Any CPU
 		{E00998C2-F927-41A9-A87C-06AC74F9B9CD}.Release|x86.Build.0 = Release|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Debug|x64.Build.0 = Debug|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Debug|x86.Build.0 = Debug|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Release|x64.ActiveCfg = Release|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Release|x64.Build.0 = Release|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Release|x86.ActiveCfg = Release|Any CPU
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -247,5 +261,6 @@ Global
 		{6F0A9720-7CD1-4744-A0E7-E67801A8DD82} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{E3979318-0050-489B-867B-D5B0E025EFC0} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{E00998C2-F927-41A9-A87C-06AC74F9B9CD} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{0847261B-F973-4E5B-8A5D-3550ECF6FB0E} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

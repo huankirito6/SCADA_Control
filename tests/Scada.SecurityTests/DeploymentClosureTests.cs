@@ -63,6 +63,16 @@ public sealed class DeploymentClosureTests
     }
 
     [Fact]
+    public void TimeoutDescendantFixtureIsBuiltWithSecurityTests()
+    {
+        string fixtureAssembly = Path.Combine(AppContext.BaseDirectory, "Scada.TimeoutDescendantFixture.dll");
+
+        Assert.True(
+            File.Exists(fixtureAssembly),
+            $"Expected deterministic .NET timeout fixture assembly: {fixtureAssembly}");
+    }
+
+    [Fact]
     public void ProcessTimeoutBoundsTerminationAndOutputDrain()
     {
         string fixtureDirectory = Path.Combine(
@@ -75,16 +85,9 @@ public sealed class DeploymentClosureTests
         {
             Directory.CreateDirectory(fixtureDirectory);
             string fixtureProject = Path.Combine(fixtureDirectory, "Hang.proj");
-            string childScript = Path.Combine(fixtureDirectory, "child.ps1");
-            File.WriteAllText(
-                childScript,
-                "Set-Content -LiteralPath $args[0] -Value $PID; " +
-                "[Console]::Out.WriteLine('descendant-standard-output'); " +
-                "[Console]::Error.WriteLine('descendant-standard-error'); " +
-                "Start-Sleep -Seconds 30");
-            string command = OperatingSystem.IsWindows()
-                ? $"powershell.exe -NoLogo -NoProfile -File \"{childScript}\" \"{descendantPidFile}\""
-                : $"sh -c 'echo $$ > \"{descendantPidFile}\"; echo descendant-standard-output; echo descendant-standard-error >&2; sleep 30'";
+            string childAssembly = Path.Combine(AppContext.BaseDirectory, "Scada.TimeoutDescendantFixture.dll");
+            Assert.True(File.Exists(childAssembly), $"Expected deterministic .NET timeout fixture assembly: {childAssembly}");
+            string command = $"dotnet \"{childAssembly}\" \"{descendantPidFile}\"";
             File.WriteAllText(
                 fixtureProject,
                 $"""
@@ -132,7 +135,15 @@ public sealed class DeploymentClosureTests
     private static int ReadProcessId(string path)
     {
         Assert.True(File.Exists(path), $"Descendant did not publish its PID at {path}.");
-        return int.Parse(File.ReadAllText(path).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+
+        try
+        {
+            return int.Parse(File.ReadAllText(path).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Exception exception) when (exception is IOException or FormatException or OverflowException)
+        {
+            throw new XunitException($"Descendant published an invalid PID at {path}: {exception.Message}");
+        }
     }
 
     private static bool IsProcessAlive(int processId)
