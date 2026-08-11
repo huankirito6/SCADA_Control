@@ -57,25 +57,32 @@ public sealed class MonotonicLogicalClock : ILogicalClock
                 var elapsed = ConvertTicksToMicroseconds(checked(ticks - _anchorTicks), _time.TimestampFrequency);
                 var predicted = checked(_anchorLogicalUs + elapsed);
                 ClockDeviation? eventData = null;
+                var nextRevision = checked(_revision + 1);
                 if (checked(wall - predicted) >= ForwardReanchorThresholdUs)
                 {
-                    var nextRevision = checked(_revision + 1);
                     eventData = new(ClockDeviationKind.ClockReanchored, _bootId, _anchorLogicalUs, wall, wall, ticks, nextRevision);
                     predicted = wall;
                     _anchorLogicalUs = wall;
                     _anchorTicks = ticks;
-                    _revision = nextRevision;
                 }
                 var logical = predicted > _highWaterUs ? predicted : checked(_highWaterUs + 1);
-                var nextState = new ClockState(logical, _revision);
+                var nextState = new ClockState(logical, nextRevision);
                 _store.Save(nextState);
+                _revision = nextRevision;
                 if (eventData is not null)
                 {
-                    try { Deviation?.Invoke(eventData); }
-                    catch { return Fail(); }
+                    var subscribers = Deviation?.GetInvocationList();
+                    if (subscribers is not null)
+                    {
+                        foreach (var subscriber in subscribers)
+                        {
+                            try { ((Action<ClockDeviation>)subscriber)(eventData); }
+                            catch { /* Observers are non-authoritative and cannot affect issuance. */ }
+                        }
+                    }
                 }
                 _highWaterUs = logical;
-                return new SampleStamp(logical, sourceTsUs, ticks, _bootId, _revision);
+                return new SampleStamp(logical, sourceTsUs, ticks, _bootId, nextRevision);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OverflowException or ArgumentOutOfRangeException)
             {

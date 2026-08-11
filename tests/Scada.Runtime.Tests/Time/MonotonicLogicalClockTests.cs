@@ -29,17 +29,23 @@ public sealed class MonotonicLogicalClockTests
     }
 
     [Fact]
-    public void SubscriberFailureFailsClosedAfterDurableCheckpoint()
+    public void ThrowingDeviationSubscriberDoesNotAffectDurableReanchoredSample()
     {
         var store = new InMemoryClockStateStore();
         var time = new FakeTimeProvider(1_000_000, 0);
         var clock = new MonotonicLogicalClock(time, store);
+        ClockDeviation? received = null;
         clock.Deviation += _ => throw new InvalidOperationException();
+        clock.Deviation += deviation => received = deviation;
         _ = clock.Next();
         time.Set(2_000_001, 1);
-        Assert.Throws<ClockUnavailableException>(() => clock.Next());
-        Assert.NotNull(store.State);
-        Assert.Equal(ClockHealth.ClockDegraded, clock.Health);
+
+        var sample = clock.Next();
+
+        Assert.Equal(ClockHealth.Healthy, clock.Health);
+        Assert.Equal(new ClockState(sample.LogicalTsUs, sample.StateRevision), store.State);
+        Assert.NotNull(received);
+        Assert.Equal(sample.StateRevision, received.StateRevision);
     }
 
     [Fact]
@@ -112,7 +118,22 @@ public sealed class MonotonicLogicalClockTests
 
         Assert.Equal(4_000_000, second.LogicalTsUs);
         Assert.NotNull(deviation);
+        Assert.Equal(second.StateRevision, deviation.StateRevision);
         Assert.Equal(ClockDeviationKind.ClockReanchored, deviation.Kind);
+    }
+
+    [Fact]
+    public void EverySuccessfulSampleAdvancesAndPersistsExactlyOneRevision()
+    {
+        var store = new InMemoryClockStateStore();
+        var clock = new MonotonicLogicalClock(new FakeTimeProvider(2_000_000, 0), store, Guid.Empty);
+
+        var first = clock.Next();
+        Assert.Equal(new ClockState(first.LogicalTsUs, first.StateRevision), store.State);
+
+        var second = clock.Next();
+        Assert.Equal(first.StateRevision + 1, second.StateRevision);
+        Assert.Equal(new ClockState(second.LogicalTsUs, second.StateRevision), store.State);
     }
 
     [Fact]
