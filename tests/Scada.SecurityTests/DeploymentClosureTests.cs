@@ -61,6 +61,55 @@ public sealed class DeploymentClosureTests
             }
         }
     }
+
+    [Fact]
+    public void ProcessTimeoutBoundsTerminationAndOutputDrain()
+    {
+        string fixtureDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"scada-timeout-fixture-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(fixtureDirectory);
+            string fixtureProject = Path.Combine(fixtureDirectory, "Hang.proj");
+            string command = OperatingSystem.IsWindows()
+                ? "cmd /c start /b ping -n 30 127.0.0.1 >nul"
+                : "sh -c 'sleep 30 &'";
+            File.WriteAllText(
+                fixtureProject,
+                $"""
+                <Project>
+                  <Target Name="Hang">
+                    <Exec Command="{System.Security.SecurityElement.Escape(command)}" />
+                  </Target>
+                </Project>
+                """);
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            XunitException exception = Assert.Throws<XunitException>(
+                () => DeploymentClosure.RunDotNet(
+                    fixtureDirectory,
+                    TimeSpan.FromMilliseconds(250),
+                    "msbuild",
+                    fixtureProject,
+                    "-t:Hang",
+                    "--nologo"));
+            stopwatch.Stop();
+
+            Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+                $"Timeout cleanup took {stopwatch.Elapsed}; expected less than 5 seconds.");
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDirectory))
+            {
+                Directory.Delete(fixtureDirectory, recursive: true);
+            }
+        }
+    }
 }
 
 internal static class DeploymentClosure
@@ -71,6 +120,7 @@ internal static class DeploymentClosure
     {
         CommandResult result = RunDotNet(
             repositoryRoot,
+            PublishTimeout,
             "publish",
             webProject,
             "-c",
@@ -132,7 +182,7 @@ internal static class DeploymentClosure
         throw new XunitException("Could not locate the repository root from the test output directory.");
     }
 
-    private static CommandResult RunDotNet(string workingDirectory, params string[] arguments)
+    internal static CommandResult RunDotNet(string workingDirectory, TimeSpan timeoutDuration, params string[] arguments)
     {
         ProcessStartInfo startInfo = new()
         {
@@ -165,7 +215,7 @@ internal static class DeploymentClosure
 
         Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
         Task<string> standardError = process.StandardError.ReadToEndAsync();
-        using CancellationTokenSource timeout = new(PublishTimeout);
+        using CancellationTokenSource timeout = new(timeoutDuration);
 
         try
         {
@@ -176,21 +226,15 @@ internal static class DeploymentClosure
             try
             {
                 process.Kill(entireProcessTree: true);
-                process.WaitForExit();
             }
             catch (InvalidOperationException)
             {
                 // The process exited between the timeout and kill attempt.
             }
 
-            CommandResult timedOutResult = new(
-                arguments,
-                -1,
-                standardOutput.GetAwaiter().GetResult(),
-                standardError.GetAwaiter().GetResult());
             throw new XunitException(
-                $"dotnet publish timed out after {PublishTimeout.TotalSeconds:0} seconds." +
-                $"{Environment.NewLine}{FormatDiagnostics(timedOutResult)}");
+                $"dotnet command timed out after {timeoutDuration.TotalSeconds:0.###} seconds: " +
+                FormatCommand(arguments));
         }
 
         return new CommandResult(
@@ -223,7 +267,7 @@ internal static class DeploymentClosure
             ? argument
             : $"\"{argument.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 
-    private sealed record CommandResult(
+    internal sealed record CommandResult(
         IReadOnlyList<string> Arguments,
         int ExitCode,
         string StandardOutput,

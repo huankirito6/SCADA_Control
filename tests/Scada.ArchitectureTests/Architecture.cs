@@ -1,7 +1,8 @@
 using NetArchTest.Rules;
 using System.Reflection;
 using System.Runtime.Loader;
-using System.Xml.Linq;
+using System.Diagnostics;
+using System.Text.Json;
 using Xunit.Sdk;
 
 namespace Scada.ArchitectureTests;
@@ -101,29 +102,35 @@ internal static class Architecture
         List<string> violations = [];
         foreach (string projectName in ProductProjectNames)
         {
-            XDocument project = LoadProject(productProjects[projectName]);
-            string[] actualProjectReferences = GetReferences(project, "ProjectReference")
-                .Select(reference => Path.GetFileNameWithoutExtension(reference)!)
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-            AddSetViolations(
+            AddProjectDependencyViolations(
                 violations,
+                productProjects[projectName],
                 projectName,
-                "project references",
                 AllowedProjectReferences[projectName],
-                actualProjectReferences);
-
-            string[] actualPackageReferences = GetReferences(project, "PackageReference")
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-            AddSetViolations(
-                violations,
-                projectName,
-                "package references",
-                AllowedPackageReferences[projectName],
-                actualPackageReferences);
+                AllowedPackageReferences[projectName]);
         }
 
+        if (violations.Count > 0)
+        {
+            throw new XunitException(
+                "Product dependency graph does not match the exact allowed graph." + Environment.NewLine +
+                string.Join(Environment.NewLine, violations));
+        }
+    }
+
+    internal static void AssertProjectDependencyGraph(
+        string projectPath,
+        string projectName,
+        string[] expectedProjectReferences,
+        string[] expectedPackageReferences)
+    {
+        List<string> violations = [];
+        AddProjectDependencyViolations(
+            violations,
+            projectPath,
+            projectName,
+            expectedProjectReferences,
+            expectedPackageReferences);
         if (violations.Count > 0)
         {
             throw new XunitException(
@@ -166,10 +173,9 @@ internal static class Architecture
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
-        XDocument project = LoadProject(projectPath);
-        string[] declaredViolations = GetReferences(project, "ProjectReference")
-            .Select(reference => Path.GetFileNameWithoutExtension(reference)!)
-            .Concat(GetReferences(project, "PackageReference"))
+        EvaluatedReferences references = GetEvaluatedReferences(projectPath);
+        string[] declaredViolations = references.ProjectReferences
+            .Concat(references.PackageReferences)
             .Where(reference => forbiddenPrefixes.Any(prefix => MatchesPrefix(reference, prefix)))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(reference => reference, StringComparer.Ordinal)
@@ -195,8 +201,7 @@ internal static class Architecture
 
         string repositoryRoot = FindRepositoryRoot();
         Dictionary<string, string> productProjects = FindProductProjects(repositoryRoot);
-        XDocument project = LoadProject(productProjects[projectName]);
-        string[] packageReferences = GetReferences(project, "PackageReference").ToArray();
+        string[] packageReferences = GetEvaluatedReferences(productProjects[projectName]).PackageReferences;
         if (packageReferences.Length > 0)
         {
             throw new XunitException(
@@ -210,7 +215,7 @@ internal static class Architecture
         string repositoryRoot = FindRepositoryRoot();
         Dictionary<string, string> productProjects = FindProductProjects(repositoryRoot);
         string[] actualProjects = productProjects
-            .Where(project => GetReferences(LoadProject(project.Value), "PackageReference")
+            .Where(project => GetEvaluatedReferences(project.Value).PackageReferences
                 .Contains("Microsoft.Data.Sqlite", StringComparer.Ordinal))
             .Select(project => project.Key)
             .OrderBy(projectName => projectName, StringComparer.Ordinal)
@@ -264,25 +269,67 @@ internal static class Architecture
         return AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
     }
 
-    private static XDocument LoadProject(string projectPath)
+    private static void AddProjectDependencyViolations(
+        List<string> violations,
+        string projectPath,
+        string projectName,
+        IEnumerable<string> expectedProjectReferences,
+        IEnumerable<string> expectedPackageReferences)
     {
-        try
-        {
-            return XDocument.Load(projectPath, LoadOptions.SetLineInfo);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException)
-        {
-            throw new XunitException($"Could not read MSBuild project '{projectPath}': {exception.Message}");
-        }
+        EvaluatedReferences references = GetEvaluatedReferences(projectPath);
+        AddSetViolations(violations, projectName, "project references", expectedProjectReferences, references.ProjectReferences);
+        AddSetViolations(violations, projectName, "package references", expectedPackageReferences, references.PackageReferences);
     }
 
-    private static IEnumerable<string> GetReferences(XDocument project, string itemName)
-        => project
-            .Descendants()
-            .Where(element => string.Equals(element.Name.LocalName, itemName, StringComparison.Ordinal))
-            .Select(element => (string?)element.Attribute("Include"))
-            .Where(include => !string.IsNullOrWhiteSpace(include))
-            .Select(include => include!);
+    private static EvaluatedReferences GetEvaluatedReferences(string projectPath)
+    {
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = "dotnet",
+            WorkingDirectory = Path.GetDirectoryName(projectPath)!,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("msbuild");
+        startInfo.ArgumentList.Add(projectPath);
+        startInfo.ArgumentList.Add("-getItem:ProjectReference,PackageReference");
+        startInfo.ArgumentList.Add("--nologo");
+
+        using Process process = Process.Start(startInfo)
+            ?? throw new XunitException($"Failed to start MSBuild evaluation for '{projectPath}'.");
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> errorTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new XunitException($"MSBuild evaluation timed out for '{projectPath}'.");
+        }
+
+        string output = outputTask.GetAwaiter().GetResult();
+        string error = errorTask.GetAwaiter().GetResult();
+        if (process.ExitCode != 0)
+        {
+            throw new XunitException(
+                $"MSBuild evaluation failed for '{projectPath}' with exit code {process.ExitCode}." +
+                $"{Environment.NewLine}{error}{Environment.NewLine}{output}");
+        }
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement items = document.RootElement.GetProperty("Items");
+        string[] projectReferences = items.GetProperty("ProjectReference")
+            .EnumerateArray()
+            .Select(item => Path.GetFileNameWithoutExtension(item.GetProperty("Identity").GetString())!)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        string[] packageReferences = items.GetProperty("PackageReference")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("Identity").GetString()!)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        return new EvaluatedReferences(projectReferences, packageReferences);
+    }
 
     private static bool MatchesPrefix(string candidate, string prefix)
         => string.Equals(candidate, prefix, StringComparison.Ordinal) ||
@@ -325,4 +372,6 @@ internal static class Architecture
         string formatted = string.Join(", ", values);
         return formatted.Length == 0 ? "<none>" : formatted;
     }
+
+    private sealed record EvaluatedReferences(string[] ProjectReferences, string[] PackageReferences);
 }
