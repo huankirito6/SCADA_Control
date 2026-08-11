@@ -27,7 +27,7 @@ Snapshot-to-delta handoff converges without pretending telemetry is lossless. Sc
 
 - Task 6: cross-language Scene corpus and canonical hash tests.
 - Task 17: snapshot/watermark race, overflow and reconnect FSM tests.
-- Tasks 18–19: renderer lifecycle, validity/accessibility and disconnect E2E tests.
-- Tasks 24–26: real-screen schema validation and editor conflict/transaction tests.
+- Tasks 18–19: renderer lifecycle plus Playwright/accessibility-tree gates for pointer/keyboard state-transition parity, exact role/name/state, post-transform target size, non-color cues, reduced motion, pointer cancel and focus across camera/interaction/reconnect.
+- Tasks 24–26: real-screen schema validation, editor conflict/transaction tests and the same actionable-control accessibility/focus parity gate for editor interactions.
 - Task 28: alarm/trend cursor, backfill and invalid-gap tests.
 - Tasks 29 and 34: 20-client performance and final system acceptance gates.

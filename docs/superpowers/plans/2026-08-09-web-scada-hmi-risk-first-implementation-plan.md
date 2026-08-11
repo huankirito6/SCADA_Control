@@ -25,14 +25,14 @@
 
 ## Decisions Locked By Review
 
-1. In-process Runtime chỉ là test adapter; production từ slice đầu chạy hai process.
+1. In-process Runtime chỉ là test adapter; Tasks 3 và 12 phải đóng two-process/service-identity production gate trước simulator-to-hardware transition ở Task 20.
 2. Minimal immutable config/publish/activation thuộc foundation, trước scan-budget validation.
 3. Activation semantic/envelope validation là all-or-nothing; connectivity failure tạo `ActiveDegraded`.
 4. `TagQuality` tách severity, reason flags và native status; trend không OR raw code.
 5. Runtime sở hữu `Stale`; browser chỉ sở hữu `RuntimeDisconnected`.
 6. Scene schema có một nguồn JSON Schema/widget manifest; server quyết canonical bytes/hash.
 7. Command consume one-time capability và durable `DispatchIntent` trước device I/O.
-8. Scene revision là audit context mặc định, không phải Runtime authorization authority.
+8. Canonical `SceneId`/`SceneRevision`/`SceneHash` là durable audit context mặc định, không phải Runtime authorization authority.
 9. Historian partition query theo batch rồi merge; không `ATTACH` toàn retention range.
 10. `alarms.db` tách khỏi historian và audit; Runtime là writer duy nhất.
 
@@ -397,21 +397,22 @@ git commit -m "feat: add immutable config activation state machine"
 - Create: `src/Scada.Cli/Commands/AuditVerifyCommand.cs`
 - Test: `tests/Scada.SecurityTests/Audit/AuditTamperTests.cs`
 - Test: `tests/Scada.SecurityTests/Audit/AuditSealLifecycleTests.cs`
+- Test: `tests/Scada.SecurityTests/Audit/AuditSealerProviderTests.cs`
 
 **Produces:** SHA-256 chain with canonical event bytes, chain ID, monotonic sequence, genesis, previous hash, build/boot/runtime IDs and signed external head seal.
 
 - [ ] **Step 1: Write tamper/failure tests**
 
-Modify, delete, reorder and truncate events; replace genesis; roll back a DB; create cross-chain command causality. With a fake clock, test seals at exactly 100 events or 60 seconds (whichever first), forced boot/clean-shutdown/policy/key-rotation seals, no early/late off-by-one, sink unavailable through the 120-second overdue boundary, recovery, key ACL denial, dual-signed rotation, retained public trust history and key-loss epoch discontinuity. Expected verifier identifies exact break and never claims a cryptographic total order between chains.
+Modify, delete, reorder and truncate events; replace genesis; roll back a DB; create cross-chain command causality. With a fake clock, test seals at exactly 100 events or 60 seconds (whichever first), forced boot/clean-shutdown/policy/key-rotation seals, no early/late off-by-one, sink unavailable through the 120-second overdue boundary and recovery. On Windows, Linux and Docker support fixtures, record provider capability outcome; distinguish permission to sign from permission to export, prove private-key export fails in non-exportable provider mode even for `AuditSealer`, and prove Web/Runtime cannot sign or export. Test required-provider absence/failed probe at startup, allowed-fallback ACL/custody, dual-signed rotation, retained public trust history and key-loss epoch discontinuity. Expected verifier identifies the exact chain break and never claims a cryptographic total order between chains.
 
 - [ ] **Step 2: Implement durability profiles**
 
-Audit/command DB uses WAL + `synchronous=FULL`; append is one transaction. Seal sink writes signed head files to an operator-configured append-only directory outside application ACL. A separate `AuditSealer` identity reads the OS-protected/non-exportable key. Seal after at most 100 events or 60 seconds; boot, clean shutdown and policy/key rotation force a seal. At 120 seconds overdue, raise a system alarm, degrade health and fail closed command/publish mutations. Rotation is dual-signed and public trust history is retained; key loss starts an explicitly discontinuous epoch through local administrator recovery.
+Audit/command DB uses WAL + `synchronous=FULL`; append is one transaction. Seal sink writes signed head files to an operator-configured append-only directory outside application ACL. A separate `AuditSealer` identity owns an OS-protected key that is non-exportable where supported. Commissioning selects `RequireNonExportable` or `AllowProtectedSoftwareFallback` and persists the provider/capability outcome: Windows prefers a probed CNG machine-key provider; Linux a configured PKCS#11 TPM/HSM; Docker an explicitly mounted PKCS#11/TPM/HSM provider/device. The fallback is a protected-at-rest software key with signer-only ACL (dedicated secret volume in Docker; never env/image/ordinary backup) and a documented limitation that host administrators can recover software key material. Required-provider absence/failed probe makes sealer startup unhealthy and command/publish mutations fail closed; explicitly allowed fallback verifies ACL, reports degraded custody and remains operational. Seal after at most 100 events or 60 seconds; boot, clean shutdown and policy/key rotation force a seal. At 120 seconds overdue, raise a system alarm, degrade health and fail closed command/publish mutations. Rotation is dual-signed and public trust history is retained; key loss starts an explicitly discontinuous epoch through local administrator recovery.
 
 - [ ] **Step 3: Verify**
 
-Run: `dotnet test tests/Scada.SecurityTests --filter "AuditTamperTests|AuditSealLifecycleTests"; dotnet run --project src/Scada.Cli -- audit verify --fixture tests/fixtures/audit/valid`
-Expected: PASS for cadence/key/sink lifecycle; exit code 0 for valid fixture and nonzero for each tampered fixture.
+Run: `dotnet test tests/Scada.SecurityTests --filter "AuditTamperTests|AuditSealLifecycleTests|AuditSealerProviderTests"; dotnet run --project src/Scada.Cli -- audit verify --fixture tests/fixtures/audit/valid`
+Expected: PASS for cadence/key/sink lifecycle and every declared platform/provider/fallback outcome; required-provider absence is fail-closed, fallback custody/ACL and host-admin limitation are evidenced; exit code 0 for valid fixture and nonzero for each tampered fixture.
 
 - [ ] **Step 4: Commit**
 
@@ -435,7 +436,7 @@ git commit -m "feat: add tamper-evident audit verification"
 
 - [ ] **Step 1: Write deny/replay tests**
 
-Cover missing permission, stale circuit, disabled user, expiry, replayed nonce, changed tag/value/hash/channel, revoked authorization snapshot, and assert no emergency role/header/token/path can bypass the permission matrix. Local account recovery must leave global writes disabled until normal identity, policy and sealer-health gates pass.
+Cover missing permission, stale circuit, disabled user, expiry, replayed nonce, changed tag/value/hash/channel and revoked authorization snapshot. Issue otherwise-valid capabilities, then submit one under a different subject, one to the wrong Runtime/site/service audience, and one issued under active policy version/digest N after policy N+1 activates. Each case must produce a typed/audited `CapabilityBindingMismatch` reason before `DispatchIntent` and before any fake driver call, leave dispatch unavailable until a fresh capability is issued, and never be accepted merely because signature/expiry/nonce are otherwise valid. Also assert no emergency role/header/token/path can bypass the permission matrix. Local account recovery must leave global writes disabled until normal identity, policy and sealer-health gates pass.
 
 - [ ] **Step 2: Implement bootstrap and revocation rules**
 
@@ -444,7 +445,7 @@ No default password. First-run and account-recovery admin ceremonies are OS-loca
 - [ ] **Step 3: Verify**
 
 Run: `dotnet test tests/Scada.SecurityTests --filter "PermissionMatrixTests|CommandCapabilityReplayTests"`  
-Expected: all unauthorized/replayed mutations are rejected and audited.
+Expected: all unauthorized/replayed/rebound/stale-policy mutations are typed and audited; changed subject, wrong audience and N→N+1 policy cases create no `DispatchIntent` or driver I/O and require a fresh capability.
 
 - [ ] **Step 4: Commit**
 
@@ -462,20 +463,20 @@ git commit -m "feat: add RBAC and one-time command capability"
 - Create: `src/Scada.Runtime/Security/PhysicalTargetPolicyEvaluator.cs`
 - Test: `tests/Scada.SecurityTests/RuntimePolicy/ConfigRemapAttackTests.cs`
 
-**Produces:** root/administrator-owned signed policy file, global write kill switch and exact read/browse/write positive allowlists.
+**Produces:** administrator/root-owned, ACL deny-write, atomically replaced local policy file with version/digest, global write kill switch and exact read/browse/write positive allowlists; no physical-policy signature or signing key.
 
 - [ ] **Step 1: Write remap attack matrix**
 
-Change one field at a time: driver, endpoint, device identity, unit/node, function, address, type, endian, scaling, raw/engineering range, rate and pulse. Every widened mapping must reject.
+Starting from an otherwise accepted mapping, widen exactly one independent tuple dimension at a time: driver; endpoint/device identity; unit/node; function; access mode; address; datatype; byte order; word order; raw/engineering transform; raw range; engineering range; write mode; max rate; pulse. Every one-field widening must reject before config activation and before command dispatch/driver I/O; the unchanged exact mapping and strictly narrower variants are the only passing controls.
 
 - [ ] **Step 2: Implement fail-closed load**
 
-Missing/invalid/unsigned policy means writes disabled. Policy changes require Runtime restart and create audit + seal events. Web identity cannot write policy path.
+Administrator/root updates use temp-write + flush + atomic replace. On restart, Runtime verifies owner, directory/file ACL, schema, monotonic policy version and canonical digest before enabling writes. Test missing, malformed/torn, wrong-owner and invalid-ACL loads independently; each disables writes before activation/dispatch. Test that Web and every service identity are denied policy-path updates, an authorized atomic update is not active before restart, and after restart the exact new version/digest is loaded with audit + forced seal evidence. There is no policy signature or policy-signing key.
 
 - [ ] **Step 3: Verify**
 
 Run: `dotnet test tests/Scada.SecurityTests --filter ConfigRemapAttackTests`  
-Expected: only exact or narrower config passes.
+Expected: every independent one-field widening and every missing/invalid/unauthorized policy or update/load path fails closed before activation/dispatch; only exact/narrower config under the atomically loaded administrator policy passes after restart.
 
 - [ ] **Step 4: Commit**
 
@@ -500,7 +501,7 @@ git commit -m "feat: enforce physical Runtime site policy"
 
 - [ ] **Step 1: Write process/peer tests**
 
-Launch real child processes with distinct identities; reject wrong SID/UID/certificate, expired capability and contract incompatibility. For config feed, authenticate the peer before returning a pointer/artifact; assert Runtime recomputes the hash over the received canonical bytes, accepts and caches only an exact pointer-hash match, and on mismatch rejects the artifact while retaining the last verified local active cache. Stop Web and assert Runtime scan loop remains alive from that verified cache. Config artifacts have no signature/config-signing key; Runtime physical-policy signing and backup package signing remain separate contracts.
+Launch real child processes with distinct identities; reject wrong SID/UID/certificate, expired capability and contract incompatibility. For config feed, authenticate the peer before returning a pointer/artifact; assert Runtime recomputes the hash over the received canonical bytes, accepts and caches only an exact pointer-hash match, and on mismatch rejects the artifact while retaining the last verified local active cache. Stop Web and assert Runtime scan loop remains alive from that verified cache. Config artifacts have no signature/config-signing key; Runtime physical policy is administrator/root-owned and ACL-protected with no signing key, while backup package signing remains a separate contract.
 
 - [ ] **Step 2: Implement mapping adapters**
 
@@ -625,22 +626,23 @@ git commit -m "feat: add no-silent-loss historian ingest"
 - Create: `src/Scada.Infrastructure.Sqlite/Historian/PartitionCatalog.cs`
 - Create: `src/Scada.Infrastructure.Sqlite/Historian/SqliteTrendRepository.cs`
 - Test: `tests/Scada.IntegrationTests/Historian/TrendCorrectnessTests.cs`
+- Test: `tests/Scada.IntegrationTests/Historian/HistorianRetentionPinTests.cs`
 - Test: `tests/Scada.LoadTests/HistorianConcurrentReadWriteTests.cs`
 
 **Produces:** per-tag seed, buckets with first/last/min/max/time-weighted sum/durations/quality masks, partition batch merge and retention pin/refcount.
 
 - [ ] **Step 1: Write hand-calculated query tests**
 
-Cover seed across partition boundary, Bad/Stale duration exclusion, min/max spike preservation, bool/enum duration/count, string rejection for numeric aggregate, semantic revision marker and NTP backward fixture.
+Cover seed across partition boundary, Bad/Stale duration exclusion, min/max spike preservation, bool/enum duration/count, string rejection for numeric aggregate, semantic revision marker and NTP backward fixture. Add a 12-week fixture (strictly more than SQLite's default attach limit of 10 databases) with a seed before the requested range and hand-calculated buckets spanning all partitions. Query the complete range and assert the exact seed plus every expected bucket. Instrument repository partition-open/batch diagnostics with configured batch size 4; assert at least three bounded batches are observed, every batch/open set is ≤4, and no connection executes a whole-range `ATTACH`.
 
 - [ ] **Step 2: Implement bounded partition query**
 
-Open/query partitions in bounded batches, merge decomposable aggregates and keep correct seed. Do not attach the full retention range. Retention deletes only unpinned closed partitions.
+Open/query partitions in bounded batches, merge decomposable aggregates and keep correct seed. Expose deterministic batch/open diagnostics for the acceptance test. Do not attach the full retention range. Retention deletes only unpinned closed partitions.
 
 - [ ] **Step 3: Run concurrency acceptance**
 
-Run: `dotnet test tests/Scada.LoadTests --filter HistorianConcurrentReadWriteTests -c Release`  
-Expected: 1.000 stored rows/s average, 5.000 burst, two concurrent 8-hour readers, zero unhandled `SQLITE_BUSY`, p99 commit <200 ms, WAL below configured threshold within 30 seconds after readers end.
+First hold a read cursor open on an eligible closed partition and observe its pin/refcount; invoke retention and assert the catalog entry and file remain. Release/dispose the reader, invoke retention again and assert the now-eligible catalog entry and file are deleted. Then run: `dotnet test tests/Scada.IntegrationTests --filter "TrendCorrectnessTests|HistorianRetentionPinTests"; dotnet test tests/Scada.LoadTests --filter HistorianConcurrentReadWriteTests -c Release`
+Expected: the 12-week exact seed/bucket query completes through observable ≤4-partition batches without whole-range `ATTACH`; deletion is blocked while pinned and succeeds after release; load sustains 1.000 stored rows/s average, 5.000 burst, two concurrent 8-hour readers, zero unhandled `SQLITE_BUSY`, p99 commit <200 ms, and WAL below the configured threshold within 30 seconds after readers end.
 
 - [ ] **Step 4: Commit**
 
@@ -737,7 +739,7 @@ git commit -m "feat: add lifecycle-safe SVG renderer"
 
 - [ ] **Step 1: Write Playwright failures**
 
-Assert zero Blazor circuit on HMI page; Bootstrapping/Stale/Bad/Offline cues; keyboard focus; 44×44 CSS-pixel hit targets after camera transform; reduced-motion static alarm cue; touch `pointercancel` recovery.
+Assert zero Blazor circuit on HMI page and retain Bootstrapping/Stale/Bad/Offline pattern + icon + text cues, 44×44 CSS-pixel hit targets after camera transform, reduced-motion static alarm cue and touch `pointercancel` recovery. For every actionable control in the fixture, use Playwright's accessibility snapshot/tree to assert the expected role, a correct non-empty accessible name, and the applicable state (`disabled`, `checked`, `pressed`, `expanded` or value). Drive the same action once by pointer and once by keyboard navigation/activation and assert the identical application state transition and command eligibility. Keep the focused control/element stable and visibly focused across camera pan/zoom, pointer or keyboard interaction, and telemetry reconnect/resync unless that control is removed, in which case focus moves to the documented fallback.
 
 - [ ] **Step 2: Implement state matrix**
 
@@ -746,7 +748,7 @@ Do not render last-known as normal. Use pattern + icon + text, not color alone. 
 - [ ] **Step 3: Verify**
 
 Run: `npx playwright test --config tests/Scada.Web.E2E/playwright.config.ts telemetry-reconnect.spec.ts touch-accessibility.spec.ts`  
-Expected: PASS at 100%, 150% and 200% browser zoom.
+Expected: PASS at 100%, 150% and 200% browser zoom with complete role/name/state assertions, pointer/keyboard transition parity and focus continuity across camera/interaction/reconnect.
 
 - [ ] **Step 4: Commit**
 
@@ -800,6 +802,7 @@ git commit -m "feat: add policy-bound Modbus TCP reads"
 - Create: `src/Scada.Runtime/Commands/CommandRecovery.cs`
 - Test: `tests/Scada.Command.Tests/CommandCrashBoundaryTests.cs`
 - Test: `tests/Scada.Command.Tests/CommandRevisionPreconditionTests.cs`
+- Test: `tests/Scada.Command.Tests/CommandSceneAuditContextTests.cs`
 
 **Produces:** Requested/Rejected in Web audit; Authorized/DispatchIntent/Attempt/Outcome in Runtime chain; `PreconditionFailed`, `Verified`, `Consistent`, `Failed`, `Indeterminate` projections.
 
@@ -819,22 +822,23 @@ public sealed record CommandRequest(
     Guid DeviceSessionGeneration,
     string SceneId,
     long SceneRevision,
+    string SceneHash,
     TagValue RequestedValue,
     string CapabilityToken);
 ```
 
 - [ ] **Step 1: Write fault-injection matrix**
 
-Crash before/after capability consume, before/after intent commit, before/after fake protocol send and before outcome commit. Test duplicate idempotency, activation/semantic/target/device-session mismatch, stale quality and changed guarded sample revision.
+Crash before/after capability consume, before/after intent commit, before/after fake protocol send and before outcome commit. Test duplicate idempotency, activation/semantic/target/device-session mismatch, stale quality and changed guarded sample revision. Repeat the otherwise-valid changed-subject, wrong Runtime/site/service audience and policy-version/digest N→N+1 capability cases from Task 10 at the executor boundary; assert a typed/audited rejection, zero `DispatchIntent`, zero fake-driver I/O and mandatory fresh capability. Canonicalize a Scene fixture through the Task 6 authority, submit its canonical `SceneId`, `SceneRevision` and `SceneHash`, then re-read `DispatchIntent` and durable audit rows and assert all three are exact and `SceneHash` equals the hash of the exact canonical Scene bytes, not client/source JSON; changing Scene context alone must not grant authority.
 
 - [ ] **Step 2: Implement exact ordering**
 
-Consume nonce and append durable intent atomically before I/O. One write outstanding per logical device; transport arbiter preserves scan quota. Restart never redispatches an intent without outcome.
+Validate every capability binding, then consume nonce and append durable intent atomically before I/O. Persist canonical `SceneId`/`SceneRevision`/`SceneHash` in the intent/audit transaction as non-authoritative context. One write outstanding per logical device; transport arbiter preserves scan quota. Restart never redispatches an intent without outcome.
 
 - [ ] **Step 3: Verify**
 
-Run: `dotnet test tests/Scada.Command.Tests --filter "CommandCrashBoundaryTests|CommandRevisionPreconditionTests"`  
-Expected: every ambiguous crash projects `INDETERMINATE`; fake driver call count never exceeds one.
+Run: `dotnet test tests/Scada.Command.Tests --filter "CommandCrashBoundaryTests|CommandRevisionPreconditionTests|CommandSceneAuditContextTests"`
+Expected: every ambiguous crash projects `INDETERMINATE`; fake driver call count never exceeds one; rebound/wrong-audience/stale-policy capabilities have no intent/I/O and require replacement; durable Scene context matches the exact canonical Scene bytes hash.
 
 - [ ] **Step 4: Commit**
 
@@ -982,12 +986,13 @@ git commit -m "feat: add transactional Scene editor core"
 - Create: `src/Scada.Application/Scenes/ISceneDraftRepository.cs`
 - Create: `src/Scada.Web/Scenes/SceneDraftController.cs`
 - Create: `tests/Scada.Web.E2E/editor-reconnect.spec.ts`
+- Create: `tests/Scada.Web.E2E/editor-accessibility.spec.ts`
 
 **Produces:** add/move/resize, grid snap, layer z-order, manifest-driven property panel, T1/T2 binding, save/load/validate, optimistic concurrency and disconnected recovery.
 
 - [ ] **Step 1: Write editor state tests**
 
-Cover Clean/Dirty/Saving/SaveFailed/Conflict/Disconnected/UnsupportedSchema/ReadOnly. Assert `SaveDraft(screenId, expectedRevision, canonicalScene)` returns a new revision or 409 without overwrite.
+Cover Clean/Dirty/Saving/SaveFailed/Conflict/Disconnected/UnsupportedSchema/ReadOnly. Assert `SaveDraft(screenId, expectedRevision, canonicalScene)` returns a new revision or 409 without overwrite. In Playwright, enumerate every actionable editor control and assert its accessibility-tree role, correct non-empty name and applicable state. For add/move/resize, layer/property actions, save and conflict recovery, drive pointer and keyboard navigation/activation variants from the same initial model and assert the same canonical editor state transition. Assert focus survives camera pan/zoom, gesture commit/cancel and reconnect (or moves to the documented fallback if the node disappears). Retain post-transform 44×44 targets, non-color state cues, reduced-motion behavior and `pointercancel` rollback assertions.
 
 - [ ] **Step 2: Preserve unsupported schema features**
 
@@ -995,8 +1000,8 @@ Rotation/group/instance nodes that MVP cannot author render locked and round-tri
 
 - [ ] **Step 3: Verify**
 
-Run: `npx playwright test --config tests/Scada.Web.E2E/playwright.config.ts editor-reconnect.spec.ts`  
-Expected: draft survives reconnect; conflict never silently overwrites another revision.
+Run: `npx playwright test --config tests/Scada.Web.E2E/playwright.config.ts editor-reconnect.spec.ts editor-accessibility.spec.ts`
+Expected: draft survives reconnect; conflict never silently overwrites another revision; every editor action has role/name/state evidence, pointer/keyboard transition parity and focus continuity through camera/interaction/reconnect.
 
 - [ ] **Step 4: Commit**
 
@@ -1186,7 +1191,7 @@ Invalid signature, unknown/wrong site key, rollback version, zip-slip, symlink, 
 
 - [ ] **Step 2: Implement coordinated quiesce/snapshot**
 
-Do not copy live WAL files. Owners create SQLite backup snapshots and report causal checkpoints; coordinator writes manifest only after all snapshots verify. A commissioning-generated site backup-signing key is OS-protected/non-exportable and accessible only to the backup signer identity; private key material is excluded from package/diagnostics/ordinary backup. Manifests carry algorithm/key ID. Rotation is dual-signed with retained public trust history; disaster recovery exports the public trust set separately. Private-key loss requires audited local recovery and a new signing epoch. Restore remains offline until signature/trust, schema, audit, policy and reconciliation checks pass.
+Do not copy live WAL files. Owners create SQLite backup snapshots and report causal checkpoints; coordinator writes manifest only after all snapshots verify. A commissioning-generated site backup-signing key is OS-protected/non-exportable where supported and accessible only to the backup signer identity; private key material is excluded from package/diagnostics/ordinary backup. Manifests carry algorithm/key ID. Rotation is dual-signed with retained public trust history; disaster recovery exports the public trust set separately. Private-key loss requires audited local recovery and a new signing epoch. Restore remains offline until signature/trust, schema, audit, policy and reconciliation checks pass.
 
 - [ ] **Step 3: Verify**
 
@@ -1212,11 +1217,11 @@ git commit -m "feat: add signed coherent backup and upgrade"
 - Create: `tests/Scada.SecurityTests/Deployment/NoEgressTests.cs`
 - Create: `tests/Scada.IntegrationTests/Deployment/ProcessIsolationTests.cs`
 
-**Produces:** Windows services with separate accounts/ACL; Linux systemd units; Docker two containers with shared UDS volume, separate DB volumes and TCP-only driver support.
+**Produces:** Windows services with separate accounts/ACL; Linux systemd units; Docker two containers with shared UDS volume, separate DB volumes and TCP-only driver support; explicit audit-sealer provider/fallback support outcome per target.
 
 - [ ] **Step 1: Write deployment security tests**
 
-Assert Web cannot open OT endpoint/policy/Runtime DB; Runtime cannot write Web DB; wrong pipe/UDS peer rejected; Data Protection keys persist and are protected; cert expiry/rotation alarms; no default/exposed remote access.
+Assert Web cannot open OT endpoint/policy/Runtime DB or the audit key/fallback blob; Runtime cannot write Web DB or sign/export audit keys; wrong pipe/UDS peer rejected; Data Protection keys persist and are protected; cert expiry/rotation alarms; no default/exposed remote access.
 
 - [ ] **Step 2: Enforce no-egress behavior**
 
@@ -1224,7 +1229,7 @@ Run container smoke with `--network none`; run Windows/Linux firewall/DNS captur
 
 - [ ] **Step 3: Verify support matrix**
 
-Run offline install, first-run CA public certificate export, login, simulator, backup, upgrade and restore on each target. Docker must reject RTU and must not store secrets in environment variables.
+Run offline install, first-run CA public certificate export, login, simulator, backup, upgrade and restore on each target. For the audit sealer, every Windows/Linux/Docker row records the preferred provider, non-exportability probe result, configured fallback permission, observed startup/fail-closed outcome, signer-only ACL and host-administrator limitation; execute the Task 9 provider tests for that row. Docker must reject RTU, must not store secrets in environment variables and must mount any fallback only in the dedicated sealer volume.
 
 - [ ] **Step 4: Commit**
 
@@ -1242,6 +1247,7 @@ git commit -m "ops: package isolated zero-Internet deployments"
 - Create: `docs/operations/commissioning-checklist.md`
 - Create: `docs/operations/incident-recovery.md`
 - Create: `docs/support/security-claims.md`
+- Create: `tests/Scada.SecurityTests/Documentation/SecurityClaimsTests.cs`
 
 **Produces:** traceable evidence for all seven goals without claiming safety or IEC certification.
 
@@ -1259,7 +1265,7 @@ Record device/vendor/firmware/adapter/OS for every passing scenario. Critical co
 
 - [ ] **Step 4: Verify documentation claims**
 
-`security-claims.md` must say tamper-evident, not tamper-proof; supervisory, not safety; IEC 62443 design intent only, not compliant/certified; Modbus has no protocol authentication; Docker has no RTU.
+Implement `SecurityClaimsTests` as a case-insensitive, whitespace-normalized scan of `docs/support/security-claims.md` and all release-facing Markdown under `docs/support` and `docs/operations`. Require these exact normalized statements in `security-claims.md`: `tamper-evident, not tamper-proof`; `supervisory system, not a safety system`; `IEC 62443 design intent only; not compliant or certified`; `Modbus has no protocol authentication`; `Docker does not support Modbus RTU`. Reject positive-claim regexes equivalent to `is tamper-proof`, `is a safety system`, `provides a safety function`, `SIL ... certified`, `IEC 62443 (compliant|certified)`, `certified to IEC 62443`, `Modbus (provides|has|uses) (protocol )?authentication`, or `Docker supports Modbus RTU`. Run: `dotnet test tests/Scada.SecurityTests --filter SecurityClaimsTests`. Expected: all required phrases occur and every forbidden positive claim count is zero; attach the scan output to the Task 34 evidence checklist.
 
 - [ ] **Step 5: Commit**
 

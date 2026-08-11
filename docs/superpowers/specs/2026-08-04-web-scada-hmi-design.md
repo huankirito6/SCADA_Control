@@ -429,7 +429,7 @@ SQLite không có partition. Làm partition ở **tầng repository**: một fil
 
 ### 8.1. Config là version bất biến; activation là state machine
 
-Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** gồm server-authoritative **canonical bytes + canonical hash**. Runtime không mở `config.db`: nó xác thực peer của config feed do Web sở hữu, **pull** published pointer và immutable canonical bytes, recompute/match hash rồi chỉ cache active artifact đã verify cục bộ. Notification chỉ là fast path; authenticated feed polling là correctness path. Config artifact không có signature hay config-signing key riêng; signed Runtime physical-policy (§9.3) và backup package-signing key là hai contract/authority độc lập.
+Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** gồm server-authoritative **canonical bytes + canonical hash**. Runtime không mở `config.db`: nó xác thực peer của config feed do Web sở hữu, **pull** published pointer và immutable canonical bytes, recompute/match hash rồi chỉ cache active artifact đã verify cục bộ. Notification chỉ là fast path; authenticated feed polling là correctness path. Config artifact không có signature hay config-signing key riêng; Runtime physical policy là file administrator/root-owned được ACL bảo vệ và cũng không có signing key (§9.3), còn backup package-signing key là contract/authority độc lập.
 
 Điều này loại bỏ RPC push-config và cả một class bug đồng bộ. Nhưng nó cần bốn thứ để đúng:
 
@@ -471,9 +471,9 @@ UI đọc một **projection** của chuỗi này. Projection có thể rebuild;
 
 **Audit ghi thất bại ⇒ REJECT lệnh (fail-closed).** Đĩa đầy mà vẫn cho ghi PLC là đúng thứ sẽ bị chất vấn trong một cuộc điều tra sự cố, và không có câu trả lời tốt.
 
-Mọi command mang `command_id`, `activation_id`, `active_config_hash`, `tag_id`, `source_binding_hash`, `value_meaning_hash`, `physical_target_digest`, expected value/sample revision, quality, observed timestamp, device-session generation, subject/capability nonce và requested typed value. Runtime re-check ngay trước durable intent. Scene id/revision/hash chỉ là audit context, không phải authority mặc định. Mismatch trước durable intent là `PreconditionFailed`, yêu cầu confirm lại và không retry.
+Mọi command mang `command_id`, `activation_id`, `active_config_hash`, `tag_id`, `source_binding_hash`, `value_meaning_hash`, `physical_target_digest`, expected value/sample revision, quality, observed timestamp, device-session generation, subject/capability nonce và requested typed value. Runtime re-check ngay trước durable intent. Canonical `SceneId`, `SceneRevision`, `SceneHash` là audit context, không phải authority mặc định; `SceneHash` phải đúng bằng hash trên exact server-authoritative canonical Scene bytes, và cả ba field phải được persist nguyên vẹn trong `DispatchIntent` cùng durable audit context. Mismatch trước durable intent là `PreconditionFailed`, yêu cầu confirm lại và không retry.
 
-Capability command là one-time, short-lived, audience/channel-bound và bind subject, exact target/value, activation/hashes, policy version, expiry, nonce. Runtime consume capability nguyên tử cùng authorization và immutable physical target + `DispatchIntent` trong durable transaction dùng command/audit durability. **Chỉ sau commit mới gọi driver.** Attempt/readback/outcome được append sau I/O; restart thấy intent chưa có outcome project thành `INDETERMINATE` và tuyệt đối không auto-dispatch lại.
+Capability command là one-time, short-lived, audience/channel-bound và bind subject, exact target/value, activation/hashes, active physical-policy version + digest, expiry, nonce và intended Runtime/site/service audience. Runtime consume capability nguyên tử cùng authorization và immutable physical target + `DispatchIntent` trong durable transaction dùng command/audit durability. Một capability otherwise-valid nhưng đổi subject, đưa tới sai Runtime/site/service audience, hoặc được cấp ở policy N rồi dùng sau khi active policy thành version/digest N+1 phải bị reject typed + audited trước `DispatchIntent`, trước driver I/O và bắt buộc lấy capability mới. **Chỉ sau commit mới gọi driver.** Attempt/readback/outcome được append sau I/O; restart thấy intent chưa có outcome project thành `INDETERMINATE` và tuyệt đối không auto-dispatch lại.
 
 Pre-write check (ở Runtime, không ở Web): capability hợp lệ/chưa consume · tag tồn tại và không retired · activation/hash/semantic/observation còn hợp lệ · `writeable=true` trong version đang chạy · physical tuple được Runtime policy cho phép (§9.3) · quyền area còn hiệu lực · typed value/range/rate hợp lệ · connection Online · quality/freshness/device generation hợp lệ · một write outstanding mỗi thiết bị · **absolute set-value, không phải toggle/increment** (§8.5). Xem [ADR-0004](../../adr/0004-command-authority-and-durability.md).
 
@@ -517,7 +517,7 @@ Sự thật cần nói ra: **mọi cơ chế truyền định danh chỉ bảo v
 
 Hai cách thu hẹp thật:
 
-- **Runtime phát hành one-time capability** sau khi kiểm authoritative authorization snapshot/revocation hoặc verifier re-auth độc lập. Capability bind exact intent như §8.3; Web không thể đổi subject/target/value/hash/channel hoặc replay nonce.
+- **Runtime phát hành one-time capability** sau khi kiểm authoritative authorization snapshot/revocation hoặc verifier re-auth độc lập. Capability bind exact intent như §8.3; Web không thể đổi subject/target/value/hash, Runtime/site/service audience, active policy version/digest hoặc replay nonce.
 - Nếu chưa triển khai authoritative verifier, threat model phải ghi rõ Web RCE có toàn quyền bên trong physical envelope và audit subject không đáng tin; không được mô tả identity propagation như một security boundary.
 
 Audit phải mang **cả hai**: `human_subject` và `assertion_path`. Không có RPC impersonation tổng quát. **Cấm truyền username trong gRPC metadata** — bắt ở code review.
@@ -529,7 +529,9 @@ On-premise với admin có OS root: **non-repudiation là bất khả thi. Khôn
 Điều đạt được là **tamper-evidence**. Chốt mức **L2 + L3**:
 
 - **L2 — hash chain.** Mỗi audit event chứa hash của event trước. Sửa hay xoá một event làm vỡ chain từ đó về sau, và `audit verify` chỉ ra chính xác vị trí. **Hai chain độc lập, mỗi chain một writer duy nhất** (§4.4) — dùng chung một chain cho hai process là một cuộc đua giành `prev_hash`, và nó vỡ dưới tải nên test đơn lẻ sẽ không thấy.
-- **L3 — seal có cadence khóa.** Seal cả hai chain head sau tối đa **100 event hoặc 60 giây**, tùy điều kiện nào đến trước; boot, shutdown sạch và policy/key rotation buộc seal ngay. Signing key nằm trong OS-protected/non-exportable store dưới identity `AuditSealer` tách khỏi Web/Runtime; private key không vào diagnostic/backup thường. Sink là append-only ngoài application ACL. Quá 120 giây không có seal thành overdue: raise system alarm, health degraded và command/publish mutation fail-closed cho tới khi seal thành công. Rotation tạo transition record được ký bởi khóa cũ và mới; giữ key ID/public trust history để verify dữ liệu cũ. Mất khóa bắt đầu chain epoch mới qua local administrator recovery ceremony và tạo discontinuity rõ ràng; không được giả vờ nối cryptographic continuity.
+- **L3 — seal có cadence khóa.** Seal cả hai chain head sau tối đa **100 event hoặc 60 giây**, tùy điều kiện nào đến trước; boot, shutdown sạch và policy/key rotation buộc seal ngay. Signing key được OS bảo vệ và **non-exportable khi provider/nền tảng hỗ trợ**, dưới identity `AuditSealer` tách khỏi Web/Runtime; private key không vào diagnostic/backup thường. Sink là append-only ngoài application ACL. Quá 120 giây không có seal thành overdue: raise system alarm, health degraded và command/publish mutation fail-closed cho tới khi seal thành công. Rotation tạo transition record được ký bởi khóa cũ và mới; giữ key ID/public trust history để verify dữ liệu cũ. Mất khóa bắt đầu chain epoch mới qua local administrator recovery ceremony và tạo discontinuity rõ ràng; không được giả vờ nối cryptographic continuity.
+
+Support contract của audit key được commissioning chọn và ghi lại: `RequireNonExportable` hoặc `AllowProtectedSoftwareFallback`. Windows ưu tiên CNG machine-key provider đã probe non-exportability; Linux ưu tiên configured PKCS#11 TPM/HSM provider với non-extractable key; Docker ưu tiên provider/device PKCS#11/TPM/HSM được mount tường minh. Fallback tương ứng là software key encrypted/protected-at-rest với ACL chỉ cho `AuditSealer` (Docker dùng dedicated secret volume, không env/image/ordinary backup). Ở provider mode, signer được sign nhưng export phải fail kể cả với signer; Web/Runtime không được sign hoặc export. Nếu mode `RequireNonExportable` mà provider vắng mặt/không đạt probe, sealer startup unhealthy và command/publish mutation fail-closed; nếu fallback được cho phép tường minh, startup phải verify ACL, báo đúng provider/custody outcome và degraded-custody status. Fallback chỉ bảo vệ trước application/service compromise, không bảo vệ trước host administrator có thể thu hồi software key material; threat docs phải nói giới hạn này. Task 9 test platform outcome, sign-vs-export, provider absence, fallback ACL/custody, rotation và key loss.
 
 **Hash chain phải có từ Task 9**, trước login/config publish/service start-stop/load-error production. Task 21 chỉ **thêm loại command event** vào log đã được chứng minh, không migrate genesis trên dữ liệu production.
 
@@ -549,12 +551,12 @@ Tài liệu sản phẩm phải viết đúng câu này: **"tamper-evident, khô
 
 Ba sửa chữa, tất cả bắt buộc:
 
-**Write policy envelope do RUNTIME sở hữu.** Một file signed trên host của Runtime, administrator/root-owned, **Web không có quyền ghi**. Đọc fail-closed lúc khởi động; đổi phải restart và sinh audit/seal event. Nội dung là positive allowlist của tuple vật lý:
+**Write policy envelope do RUNTIME sở hữu.** Một file local trên host Runtime, administrator/root-owned; directory/file ACL deny-write cho Web và mọi service identity. Không có physical-policy signature hay signing key. Administrator/root update bằng temp-write + flush + atomic replace; Runtime chỉ load khi restart sau khi verify owner, ACL, schema, monotonic policy version và canonical policy digest. Missing/malformed/torn/non-atomic/wrong-owner/wrong-ACL đều disable write fail-closed. Mỗi update được audit và force external seal. Nội dung là positive allowlist của tuple vật lý:
 
 ```text
-driver + endpoint/device identity + unit/node + function/access mode +
-address + datatype + byte/word order + raw/engineering transform +
-raw/engineering range + write mode + max rate/pulse
+driver + endpoint/device identity + unit/node + function + access mode +
+address + datatype + byte order + word order + raw/engineering transform +
+raw range + engineering range + write mode + max rate + pulse
 ```
 
 **Luật: một config version chỉ được HẸP HƠN tuple đã duyệt, không bao giờ rộng hơn.** Broadcast write và function nguy hiểm bị cấm mặc định. Read/browse cũng có network allowlist để Runtime không trở thành OT scanner. Mặc định `other_writers_possible=true` cho tới khi commissioning evidence chứng minh ngược lại.
@@ -886,7 +888,7 @@ Các hard gate theo thứ tự là:
 
 Task number, file, command và expected evidence cụ thể nằm trong implementation plan; bảng traceability §17 nối từng risk finding tới gate đó.
 
-Có thể hoãn an toàn: logic readback nâng cao, timer momentary OFF, tuning rate limit, UI PIN re-auth, polish CLI verify, UI sửa role, signed backup package, shelving/latching, PostgreSQL, Docker.
+Không dùng danh sách “có thể hoãn” như một gate. Phạm vi bắt buộc được quyết bằng task: Task 9 khóa `audit verify`; Tasks 10–11 và 20–22 khóa capability/re-auth, rate/pulse, readback và momentary-command behavior trước khi enable write; Task 27 khóa shelving/latching trước Task 28; Task 32 khóa signed backup và Task 33 khóa Docker trước release gate Task 34. UI PIN riêng và UI sửa role không phải release requirement nếu chưa được thêm bằng task đã review; PostgreSQL là out of scope theo §18, không phải work “hoãn”.
 
 ---
 
@@ -923,9 +925,9 @@ Mỗi finding P0/P1 trong review ngày 2026-08-09 có một quyết định ADR 
 | Finding | Hợp đồng đã khóa | ADR | Task triển khai sau Task 1 | Automated gate / evidence |
 |---|---|---|---|---|
 | P0-1 Process boundary | Hai process/identity trước hardware; Web không driver/credential/OT route | ADR-0001 | 3, 12, 33 | Deployment closure + two-process peer/ACL/IPC auth tests |
-| P0-2 Physical write envelope | Runtime positive allowlist của full physical tuple; config chỉ hẹp hơn | ADR-0004 | 11, 20 | Field-by-field config-remap attack matrix |
-| P0-3 Command revision/observation | Command bind activation/config/source/value/target/observation/generation | ADR-0004 | 4, 8, 10, 21–22 | Semantic hash + stale-observation/precondition E2E matrix |
-| P0-4 Identity authority | One-time bound capability + authoritative revocation/re-auth | ADR-0004 | 10, 21–22 | Replay/expiry/revocation/channel-binding tests |
+| P0-2 Physical write envelope | Runtime administrator/root-owned, ACL deny-write, atomically updated positive allowlist with monotonic policy version/canonical digest for every independent physical-tuple field; no signing key; config chỉ hẹp hơn | ADR-0004 | 11, 20 | One-field widening matrix rejects every driver/endpoint-device/unit-node/function/access/address/datatype/byte-order/word-order/transform/raw-range/engineering-range/write-mode/max-rate/pulse mutation before activation/dispatch; missing/invalid/wrong-ACL/update/restart-load gates fail closed |
+| P0-3 Command revision/observation | Command bind activation/config/source/value/target/observation/generation plus canonical `SceneId`/`SceneRevision`/`SceneHash` as non-authoritative durable audit context | ADR-0004 | 4, 6, 8, 10, 21–22 | Semantic/precondition matrix plus exact canonical Scene bytes hash persisted in `DispatchIntent`/audit |
+| P0-4 Identity authority | One-time capability binds subject, Runtime/site/service audience and active policy version/digest + authoritative revocation/re-auth | ADR-0004 | 10, 21–22 | Otherwise-valid changed-subject/wrong-audience/stale-N→N+1 capabilities are typed/audited rejects before `DispatchIntent`/driver I/O and require fresh capability; replay/expiry/revocation remain gated |
 | P0-5 Durable ordering | Consume nonce + durable `DispatchIntent` trước driver I/O | ADR-0004 | 9, 21 | Fault injection/crash matrix proves no I/O before commit |
 | P0-6 Quality algebra | Severity, reason flags, native status tách; aggregate masks riêng | ADR-0002 | 4, 16 | Exhaustive quality combinations + bucket-duration tests |
 | P0-7 Historian contradiction | No-silent-loss; stable accepted identity; persisted gap marker | ADR-0005 | 15–16, 29 | Overflow/retry/gap/high-water and load tests |
@@ -937,17 +939,17 @@ Mỗi finding P0/P1 trong review ngày 2026-08-09 có một quyết định ADR 
 | P1-3 Scene normative schema | Stable IDs, geometry/order/actions/instances/limits/dangling refs | ADR-0006 | 6, 24 | Malicious/complexity corpus + hand-authored screens |
 | P1-4 Alarm storage | `alarms.db`, Runtime single writer, RPC-only Web access | ADR-0005 | 7, 27 | DB ownership + alarm crash/recovery tests |
 | P1-5 Alarm/trend transport | Snapshot/cursor/idempotent event/backfill/invalid-gap contract | ADR-0006 | 27–28 | Reconnect/backfill and render-state tests |
-| P1-6 Historian partition | Bounded partition batches, repository merge, retention pin/refcount | ADR-0005 | 16 | Long-range > attach-limit and concurrent-retention tests |
+| P1-6 Historian partition | Bounded partition batches, repository merge, retention pin/refcount | ADR-0005 | 16 | 12-week (> SQLite default attach limit) exact seed/bucket fixture with observable bounded batches/no whole-range `ATTACH`; active-reader pin blocks deletion, release permits deletion |
 | P1-7 Migration ownership | Mỗi writer migrate store của mình; CLI offline orchestration | ADR-0003, ADR-0005 | 7 | Wrong-owner ACL + statement-boundary crash tests |
-| P1-8 Audit L3 | Canonical chain metadata; 100-event/60-second forced seals; separate OS-protected sealer key, rotation/recovery; append-only sink; overdue fail-closed | ADR-0004 | 9 | Fake-clock cadence/boundary/forced seal, key ACL/rotation/loss, sink outage/overdue, truncate/tamper fixtures |
+| P1-8 Audit L3 | Canonical chain metadata; 100-event/60-second forced seals; separate OS-protected/non-exportable-where-supported sealer key with Windows/Linux/Docker provider matrix and protected-software fallback; append-only sink; overdue fail-closed | ADR-0004 | 9 | Platform outcome, sign-vs-export, required-provider absence, fallback ACL/custody/host-admin limitation, key rotation/loss, fake-clock seal, sink overdue and tamper fixtures |
 | P1-9 Backup/restore | Coordinated causal cut; site backup-signing key custody/rotation/recovery/trust history; bounded package; atomic restore | ADR-0003, ADR-0005 | 32 | Key ACL/rotation/loss/trust-history plus crash/malicious archive/signature/compatibility tests |
 | P1-10 Driver contract | Cancellation/deadline/capability/partial result/native status/arbitration | ADR-0001 | 13–14 | Driver conformance + cancellation/arbitration tests |
 | P1-11 OT device security | OPC UA signed+encrypted/trustlist; Modbus zone/conduit/ACL | ADR-0001, ADR-0004 | 20, 31, 33 | Insecure-profile rejection + deployment network tests |
 | P1-12 RBAC | Deny default; local bootstrap/recovery; **no break-glass bypass**; revocation/service/stale-circuit rules | ADR-0004 | 10, 22 | Permission matrix asserts no bypass token/path; local recovery keeps writes disabled; endpoint-time revocation tests |
 | P1-13 Editor state | JS-owned optimistic concurrency/round-trip/conflict/transaction FSM | ADR-0006 | 25–26 | Conflict/disconnect/undo transaction tests |
-| P1-14 Accessibility | Transformed target, keyboard/focus/name/non-color/reduced-motion/cancel | ADR-0006 | 18–19, 26 | Automated accessibility + pointer/keyboard E2E tests |
+| P1-14 Accessibility | Transformed target, keyboard/focus/name/state/non-color/reduced-motion/cancel | ADR-0006 | 18–19, 26 | Playwright accessibility-tree role/name/state assertions for every action; keyboard/pointer state-transition parity; focus survives camera/interaction/reconnect; target/non-color/motion/cancel gates retained |
 | P1-15 Frontend performance | Pinned baseline and node/frame/queue/payload/heap/RSS/20-client budgets | ADR-0006 | 18, 29, 34 | Repeatable 20-client × 300-tag load gate |
-| P1-16 IEC 62443 wording | Chỉ claim partial design intent tới khi có mapping/evidence độc lập | ADR-0001 | 33–34 | Release-doc claim scan + evidence checklist |
+| P1-16 IEC 62443 wording | Chỉ claim partial design intent tới khi có mapping/evidence độc lập | ADR-0001 | 33–34 | Executable `SecurityClaimsTests` required/forbidden release-doc phrase scan + evidence checklist |
 
 ---
 

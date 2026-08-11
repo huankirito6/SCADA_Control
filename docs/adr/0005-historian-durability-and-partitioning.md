@@ -26,6 +26,6 @@ Operators can distinguish accepted durability from detected pre-acceptance gaps.
 
 - Task 7: database ownership and migration tests.
 - Task 15: ingest identity, retry, overflow/gap marker and early-warning tests.
-- Task 16: partition batching, seed/merge, pin/refcount and long-range trend tests.
+- Task 16: a 12-week fixture exceeds SQLite's default attach limit, proves complete seed/buckets through observable bounded batches without whole-range `ATTACH`, and proves retention cannot delete a reader-pinned partition until the reader releases it.
 - Task 27: durable `alarms.db` ownership and alarm-state recovery tests.
 - Task 32: coordinated backup/restore tests.
