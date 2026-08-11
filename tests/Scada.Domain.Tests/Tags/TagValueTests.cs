@@ -5,6 +5,18 @@ namespace Scada.Domain.Tests.Tags;
 public sealed class TagValueTests
 {
     [Fact]
+    public void DefaultIsInvalidAndCannotMasqueradeAsFalse()
+    {
+        var value = default(TagValue);
+
+        Assert.NotEqual(TagValueKind.Boolean, value.Kind);
+        Assert.NotEqual(TagValue.FromBool(false), value);
+        Assert.Throws<InvalidOperationException>(() => value.AsBool());
+        Assert.Throws<InvalidOperationException>(() => value.ToWireValue());
+        Assert.NotEqual(value.GetHashCode(), TagValue.FromBool(false).GetHashCode());
+    }
+
+    [Fact]
     public void FactoriesPreserveEachSupportedKindAndPayload()
     {
         var boolean = TagValue.FromBool(true);

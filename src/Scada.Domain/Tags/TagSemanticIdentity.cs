@@ -5,8 +5,22 @@ using System.Text;
 
 namespace Scada.Domain.Tags;
 
-public sealed record TagSemanticIdentity(string SourceBindingHash, string ValueMeaningHash, string PhysicalTargetDigest)
+public sealed record TagSemanticIdentity
 {
+    public TagSemanticIdentity(string sourceBindingHash, string valueMeaningHash, string physicalTargetDigest)
+    {
+        ValidateHash(sourceBindingHash, nameof(sourceBindingHash));
+        ValidateHash(valueMeaningHash, nameof(valueMeaningHash));
+        ValidateText(physicalTargetDigest, nameof(physicalTargetDigest));
+        SourceBindingHash = sourceBindingHash;
+        ValueMeaningHash = valueMeaningHash;
+        PhysicalTargetDigest = physicalTargetDigest;
+    }
+
+    public string SourceBindingHash { get; }
+    public string ValueMeaningHash { get; }
+    public string PhysicalTargetDigest { get; }
+
     public static TagSemanticIdentity Create(
         string endpoint,
         string unitOrNode,
@@ -54,6 +68,15 @@ public sealed record TagSemanticIdentity(string SourceBindingHash, string ValueM
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new ArgumentException("A semantic identity field must not be null, empty, or whitespace.", parameterName);
+        }
+    }
+
+    private static void ValidateHash(string value, string parameterName)
+    {
+        ValidateText(value, parameterName);
+        if (value.Length != 64 || value.Any(static c => !Uri.IsHexDigit(c) || char.IsUpper(c)))
+        {
+            throw new ArgumentException("Hash must be lowercase 64-character SHA-256 hexadecimal.", parameterName);
         }
     }
 }

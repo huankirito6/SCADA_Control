@@ -61,8 +61,16 @@ public readonly record struct TagQuality
         return left >= right ? left : right;
     }
 
-    public static TagQuality Combine(TagQuality left, TagQuality right) =>
-        new(WorstSeverity(left.Severity, right.Severity), left.Reasons | right.Reasons, null);
+    public static TagQuality Combine(TagQuality left, TagQuality right)
+    {
+        uint? nativeStatus = left.NativeStatus ?? right.NativeStatus;
+        if (left.NativeStatus.HasValue && right.NativeStatus.HasValue && left.NativeStatus != right.NativeStatus)
+        {
+            throw new InvalidOperationException("Cannot combine conflicting native quality statuses.");
+        }
+
+        return new(WorstSeverity(left.Severity, right.Severity), left.Reasons | right.Reasons, nativeStatus);
+    }
 
     private static void ValidateSeverity(QualitySeverity severity, string parameterName)
     {

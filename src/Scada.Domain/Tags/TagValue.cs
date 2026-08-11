@@ -2,14 +2,15 @@ namespace Scada.Domain.Tags;
 
 public enum TagValueKind : byte
 {
-    Boolean = 0,
-    Signed16 = 1,
-    Signed32 = 2,
-    Signed64 = 3,
-    Real32 = 4,
-    Real64 = 5,
-    Text = 6,
-    Enumeration = 7,
+    Invalid = 0,
+    Boolean = 1,
+    Signed16 = 2,
+    Signed32 = 3,
+    Signed64 = 4,
+    Real32 = 5,
+    Real64 = 6,
+    Text = 7,
+    Enumeration = 8,
 }
 
 public readonly struct TagValue : IEquatable<TagValue>
@@ -49,6 +50,8 @@ public readonly struct TagValue : IEquatable<TagValue>
         : this(kind) => stringValue = value;
 
     public TagValueKind Kind { get; }
+
+    public bool IsValid => Kind is not TagValueKind.Invalid;
 
     public static TagValue FromBool(bool value) => new(value);
 
@@ -126,7 +129,7 @@ public readonly struct TagValue : IEquatable<TagValue>
 
     public override bool Equals(object? obj) => obj is TagValue other && Equals(other);
 
-    public override int GetHashCode() => HashCode.Combine(Kind, ToWireValue());
+    public override int GetHashCode() => IsValid ? HashCode.Combine(Kind, ToWireValue()) : HashCode.Combine(Kind);
 
     public static bool operator ==(TagValue left, TagValue right) => left.Equals(right);
 
