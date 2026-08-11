@@ -267,20 +267,25 @@ public readonly record struct SampleStamp(long LogicalTsUs, long? SourceTsUs, lo
 public interface ILogicalClock { SampleStamp Next(long? sourceTsUs = null); ClockHealth Health { get; } }
 ```
 
-- [ ] **Step 1: Write fake-clock failures**
+- [ ] **Step 1: Add compile-only typed test seam, then write fake-clock failures**
 
-Cover NTP step backward/forward, many tags in one microsecond, process restart with OS time below persisted high-water, and OPC UA source timestamps arriving out of order.
+Create the Runtime test project and a typed compile-only `MonotonicLogicalClock` skeleton with the required constructor/API but intentionally incorrect behavior. The skeleton exists solely so tests call the production API directly; it must not return canned results, contain production ordering logic, or be presented as RED evidence. Then write fake-`TimeProvider` tests for NTP step backward/forward, many tags in one microsecond, process restart with OS time below persisted high-water, and OPC UA source timestamps arriving out of order.
 
-- [ ] **Step 2: Implement one Runtime-wide clock**
+- [ ] **Step 2: Verify behavioral RED**
 
-Anchor logical UTC to monotonic elapsed, never re-anchor backward, persist high-water checkpoints, expose `ClockDegraded` and record re-anchor/deviation audit events. Use logical time as ordering key; retain source time only as metadata.
+Run: `dotnet test tests/Scada.Runtime.Tests --filter MonotonicLogicalClockTests`
+Expected: test assembly compiles and scenario assertions fail because the typed skeleton produces incorrect logical-time behavior. A missing type/constructor, reflection lookup assertion, restore error, or compilation error is not valid RED evidence. Preserve the test names and failure output in the local Task 5 report.
 
-- [ ] **Step 3: Verify**
+- [ ] **Step 3: Implement one Runtime-wide clock**
 
-Run: `dotnet test tests/Scada.Runtime.Tests --filter MonotonicLogicalClockTests`  
-Expected: strictly increasing logical stamps across all scenarios; backward wall step never creates per-tag clocks.
+Replace the incorrect skeleton behavior with one serialized Runtime-wide clock. Anchor logical UTC to monotonic elapsed; never re-anchor backward; on a forward wall-clock deviation, re-anchor only forward and expose a typed `ClockDeviation` hook/event record for Task 9. Persist high-water checkpoints before returning a sample. File checkpoints must use a same-directory unique temporary path, flush to disk, use `File.Replace` when replacing an existing Windows destination and an atomic move only for first creation, and clean up only the temporary file owned by the operation. Corrupt/null checkpoint, save/access failure, and timestamp/revision overflow must fail closed: set `ClockDegraded` and return no sample. Use logical time as ordering key; retain source time only as metadata. Audit append integration is deliberately deferred to Task 9 because `IAuditAppender` does not exist yet; Task 5 must expose the typed event data required for that later wiring, but must not create an audit API early.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Verify GREEN, durability and handoff**
+
+Run: `dotnet test tests/Scada.Runtime.Tests --filter MonotonicLogicalClockTests`
+Expected: strictly increasing logical stamps across all scenarios; backward wall step never creates per-tag clocks; forward deviation produces a typed hook record without moving backward; restart and successful file-store replacement preserve high-water order; corrupt/null checkpoint, save/access failure, and overflow emit no sample and set `ClockDegraded`. Replace initial reflection-only tests with direct typed tests after the valid RED has been recorded. Record the Task 9 audit-event handoff fields: event kind (`ClockReanchored` or `ClockDeviationDetected`), boot ID, prior/new anchor logical microseconds, observed wall logical microseconds, monotonic ticks, and state revision.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src tests/Scada.Runtime.Tests
@@ -403,7 +408,7 @@ git commit -m "feat: add immutable config activation state machine"
 
 - [ ] **Step 1: Write tamper/failure tests**
 
-Modify, delete, reorder and truncate events; replace genesis; roll back a DB; create cross-chain command causality. With a fake clock, test seals at exactly 100 events or 60 seconds (whichever first), forced boot/clean-shutdown/policy/key-rotation seals, no early/late off-by-one, sink unavailable through the 120-second overdue boundary and recovery. On Windows, Linux and Docker support fixtures, record provider capability outcome; distinguish permission to sign from permission to export, prove private-key export fails in non-exportable provider mode even for `AuditSealer`, and prove Web/Runtime cannot sign or export. Test required-provider absence/failed probe at startup, allowed-fallback ACL/custody, dual-signed rotation, retained public trust history and key-loss epoch discontinuity. Expected verifier identifies the exact chain break and never claims a cryptographic total order between chains.
+Modify, delete, reorder and truncate events; replace genesis; roll back a DB; create cross-chain command causality. Add a Task 5 logical-clock handoff matrix: append canonical `ClockReanchored` and `ClockDeviationDetected` events from the Task 5 typed hook, asserting event kind, boot ID, prior/new anchor logical microseconds, observed wall logical microseconds, monotonic ticks, and state revision; reject incomplete/malformed payloads and prove a failed append makes the Runtime health/mutation path fail closed according to the audit durability policy. With a fake clock, test seals at exactly 100 events or 60 seconds (whichever first), forced boot/clean-shutdown/policy/key-rotation seals, no early/late off-by-one, sink unavailable through the 120-second overdue boundary and recovery. On Windows, Linux and Docker support fixtures, record provider capability outcome; distinguish permission to sign from permission to export, prove private-key export fails in non-exportable provider mode even for `AuditSealer`, and prove Web/Runtime cannot sign or export. Test required-provider absence/failed probe at startup, allowed-fallback ACL/custody, dual-signed rotation, retained public trust history and key-loss epoch discontinuity. Expected verifier identifies the exact chain break and never claims a cryptographic total order between chains.
 
 - [ ] **Step 2: Implement durability profiles**
 
