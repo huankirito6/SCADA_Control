@@ -17,8 +17,9 @@ Ordinal packed quality is not closed under bitwise OR, so bucket aggregation can
 
    `max(3 × ScanPeriodMs, 2_000) <= StaleAfterMs <= 60_000`.
 
-5. Browser transport state `RuntimeDisconnected` is separate from domain quality. Bad/Stale/NoData/Disconnected always show a pattern plus icon/text and age, contribute to the global invalid count, and disable command.
-6. Invalid quality poisons expressions/bindings; there is no silent coercion.
+5. A process start creates a new `BootId`. Before the first successful fresh scan in that boot, every persisted last observation whose `BootId` differs from the current boot is projected immediately as `Stale + LastKnown`; commands are disabled. Monotonic ticks are never compared across boot IDs, and the persisted logical timestamp is audit/history context only: neither can preserve `Good` or delay the boot-stale transition. The transition is published and persisted even when value deadband or historian store-rate would otherwise suppress a sample. Only a successful fresh scan carrying the current `BootId` may clear `Stale`, and it does so according to the scan's actual quality.
+6. Browser transport state `RuntimeDisconnected` is separate from domain quality. Bad/Stale/NoData/Disconnected always show a pattern plus icon/text and age, contribute to the global invalid count, and disable command.
+7. Invalid quality poisons expressions/bindings; there is no silent coercion.
 
 ## Consequences
 
@@ -28,6 +29,6 @@ Domain and wire representations require explicit conversion, but quality aggrega
 
 - Task 4: exhaustive quality-combination and semantic hash tests.
 - Task 5: backward/forward clock step, restart and persisted high-water tests.
-- Task 14: fake-clock Runtime stale-transition matrix covering lower/upper publish bounds, exact threshold, monotonic/logical advance, scan recovery, restart/boot behavior and quality-transition persistence bypassing deadband/store-rate.
+- Task 14: fake-clock Runtime stale-transition matrix covering lower/upper publish bounds, exact threshold, monotonic/logical advance, scan recovery, and exact restart assertions: an old-boot persisted observation is immediately `Stale + LastKnown` with command disabled before the first fresh scan; no cross-boot monotonic comparison or old logical timestamp may retain `Good`; that transition is published/persisted despite deadband/store-rate; only a current-boot successful scan clears `Stale` according to actual quality.
 - Task 16: trend quality-duration tests.
 - Task 19: validity/accessibility state matrix and command-disable E2E tests.

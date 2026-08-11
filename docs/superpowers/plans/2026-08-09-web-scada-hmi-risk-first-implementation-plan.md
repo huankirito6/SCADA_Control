@@ -369,7 +369,7 @@ git commit -m "feat: establish single-owner database migrations"
 
 - [ ] **Step 1: Write failing canonical/publish tests**
 
-Cover key order, Unicode, cultures, floats, schemaVersion inclusion, publish crash before/after commit, re-activation of an old version and poll recovery after notification loss.
+Cover key order, Unicode, cultures, floats, `schemaVersion` inclusion, byte-for-byte canonical output and server-authoritative hash recomputation/mismatch rejection, plus publish crash before/after commit, re-activation of an old version and poll recovery after notification loss.
 
 - [ ] **Step 2: Implement activation semantics**
 
@@ -500,11 +500,11 @@ git commit -m "feat: enforce physical Runtime site policy"
 
 - [ ] **Step 1: Write process/peer tests**
 
-Launch real child processes with distinct identities; reject wrong SID/UID/certificate, expired capability and contract incompatibility. Stop Web and assert Runtime scan loop remains alive.
+Launch real child processes with distinct identities; reject wrong SID/UID/certificate, expired capability and contract incompatibility. For config feed, authenticate the peer before returning a pointer/artifact; assert Runtime recomputes the hash over the received canonical bytes, accepts and caches only an exact pointer-hash match, and on mismatch rejects the artifact while retaining the last verified local active cache. Stop Web and assert Runtime scan loop remains alive from that verified cache. Config artifacts have no signature/config-signing key; Runtime physical-policy signing and backup package signing remain separate contracts.
 
 - [ ] **Step 2: Implement mapping adapters**
 
-Generated protobuf types never enter Domain/Application APIs. Map/copy `Int64`, typed values, quality width and timestamps explicitly. Runtime pulls immutable config artifact from Web feed and caches last active version locally.
+Generated protobuf types never enter Domain/Application APIs. Map/copy `Int64`, typed values, quality width and timestamps explicitly. Runtime pulls the published pointer and immutable canonical bytes from the authenticated Web config feed, verifies the recomputed canonical hash against the pointer, and caches only the verified active version locally.
 
 - [ ] **Step 3: Verify**
 
@@ -567,11 +567,11 @@ git commit -m "feat: define driver contract and simulator"
 
 - [ ] **Step 1: Write deterministic schedule tests**
 
-Prove no catch-up, p99 jitter calculation, one in-flight RTU request per bus, one bad slave not tripping other logical devices, command quota not starving scan and impossible 9600-baud config warning. For stale behavior, use an injected fake monotonic/logical clock and cover publish rejection immediately below/above the formula bounds, acceptance at both bounds, no transition one tick before `StaleAfterMs`, transition at the exact threshold, large logical-clock advance, scan recovery to current quality, process restart with a new boot ID and persisted last-observation state, and no dependence on wall/source-clock steps.
+Prove no catch-up, p99 jitter calculation, one in-flight RTU request per bus, one bad slave not tripping other logical devices, command quota not starving scan and impossible 9600-baud config warning. In `StaleTransitionTests`, use an injected fake monotonic/logical clock and assert publish rejection immediately below/above the formula bounds, acceptance at both bounds, no transition one tick before `StaleAfterMs`, transition at the exact threshold, large logical-clock advance, scan recovery to current quality and no dependence on wall/source-clock steps. For process restart, seed a persisted `Good` last observation with the previous `BootId`, start Runtime with a new `BootId`, and assert before any fresh scan that it is immediately projected as `Stale + LastKnown`, command is disabled, and the quality-only transition is published and persisted despite deadband/store-rate. Vary the old monotonic ticks and logical timestamp to assert neither is compared/used to retain `Good`; then assert only the first successful scan carrying the new `BootId` clears `Stale`, to that scan's actual quality.
 
 - [ ] **Step 2: Implement fixed scan groups**
 
-Planner validates structured addresses and uses protocol limits. `StaleAfterMs` publish validation follows the locked formula. Runtime stale evaluation is driven only by the injected monotonic/logical clock. Quality transitions into and out of Stale are published and persisted as quality-only transitions that bypass historian deadband/store-rate.
+Planner validates structured addresses and uses protocol limits. `StaleAfterMs` publish validation follows the locked formula. Within one boot, Runtime stale evaluation is driven only by the injected monotonic/logical clock. Across boots it never compares monotonic ticks: before the current boot's first successful fresh scan, an old-boot persisted observation is projected immediately to `Stale + LastKnown`; its old logical timestamp remains audit/history context only. Quality transitions into and out of Stale are published and persisted as quality-only transitions that bypass historian deadband/store-rate.
 
 - [ ] **Step 3: Verify**
 

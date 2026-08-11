@@ -347,6 +347,8 @@ max(3 × ScanPeriodMs, 2_000) <= StaleAfterMs <= 60_000
 
 Không có implicit default khi publish. Browser giữ transport state `RuntimeDisconnected` riêng và không sửa domain quality. `Bad`, `Stale`, `NoData`, `RuntimeDisconnected` luôn có pattern + icon/text + age + global invalid count và disable command.
 
+**Boot/restart stale contract:** mỗi process start tạo `BootId` mới. Trước successful fresh scan đầu tiên của boot hiện tại, mọi persisted last observation mang `BootId` cũ phải được project **ngay lập tức** thành `Stale + LastKnown` và command bị disable. Tuyệt đối không so sánh monotonic ticks giữa hai boot; logical timestamp cũ chỉ là audit/history context, không được dùng để giữ `Good` hoặc trì hoãn stale. Transition boot-stale bắt buộc được publish và persist dù value deadband hoặc historian store-rate có thể suppress sample. Chỉ successful fresh scan mang `BootId` mới mới được clear `Stale`, theo actual quality của scan đó.
+
 ### 7.5. Mô hình đọc: `QueryTrend`, không phải `QueryRange`
 
 `QueryRange(tagId, from, to) → samples[]` bị loại. Nó rò rỉ theo hướng sai và có ba lý do độc lập:
@@ -427,11 +429,11 @@ SQLite không có partition. Làm partition ở **tầng repository**: một fil
 
 ### 8.1. Config là version bất biến; activation là state machine
 
-Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** kèm **canonical hash**. Runtime không mở `config.db`: nó **pull** published pointer và immutable artifact qua authenticated config feed do Web sở hữu, verify canonical hash/signature, rồi cache active artifact cục bộ. Notification chỉ là fast path; feed polling là correctness path.
+Engineer sửa cấu hình trong **draft**. **Publish** tạo một version **bất biến** gồm server-authoritative **canonical bytes + canonical hash**. Runtime không mở `config.db`: nó xác thực peer của config feed do Web sở hữu, **pull** published pointer và immutable canonical bytes, recompute/match hash rồi chỉ cache active artifact đã verify cục bộ. Notification chỉ là fast path; authenticated feed polling là correctness path. Config artifact không có signature hay config-signing key riêng; signed Runtime physical-policy (§9.3) và backup package-signing key là hai contract/authority độc lập.
 
 Điều này loại bỏ RPC push-config và cả một class bug đồng bộ. Nhưng nó cần bốn thứ để đúng:
 
-**Canonical JSON phải được định nghĩa, không phải giả định.** "Hash của JSON" là vô định nghĩa cho tới khi chốt: thứ tự khoá, cách round-trip float, encoding, và **có gồm `schemaVersion` hay không**. Không chốt thì hash khác nhau giữa hai máy hoặc hai culture và signature vô dụng. Bảo vệ bằng **property test chạy trên nhiều culture** (`tr-TR` là culture làm vỡ code so sánh chuỗi).
+**Canonical JSON phải được định nghĩa, không phải giả định.** "Hash của JSON" là vô định nghĩa cho tới khi chốt: thứ tự khoá, cách round-trip float, encoding, và **có gồm `schemaVersion` hay không**. Không chốt thì canonical bytes/hash khác nhau giữa hai máy hoặc hai culture và Runtime sẽ từ chối artifact hợp lệ. Bảo vệ bằng **property test chạy trên nhiều culture** (`tr-TR` là culture làm vỡ code so sánh chuỗi).
 
 **`ReloadConfig` không được là điểm đơn nhất.** Web publish rồi crash trước khi notify → Runtime không được kẹt ở version cũ. Runtime poll published pointer qua config-feed contract; notification là đường nhanh, authenticated feed poll là đường đúng. Docker dùng DB volume tách biệt và không mount `config.db` vào Runtime.
 
@@ -928,7 +930,7 @@ Mỗi finding P0/P1 trong review ngày 2026-08-09 có một quyết định ADR 
 | P0-6 Quality algebra | Severity, reason flags, native status tách; aggregate masks riêng | ADR-0002 | 4, 16 | Exhaustive quality combinations + bucket-duration tests |
 | P0-7 Historian contradiction | No-silent-loss; stable accepted identity; persisted gap marker | ADR-0005 | 15–16, 29 | Overflow/retry/gap/high-water and load tests |
 | P0-8 Snapshot→delta handoff | Generation + epoch + snapshot watermark + serialized dirty mailbox | ADR-0006 | 17 | Snapshot race/overflow/resync FSM tests |
-| P0-9 Stale/offline | Runtime stale formula; disconnected state riêng; invalid disables command | ADR-0002, ADR-0006 | 14, 19 | Task 14 fake-clock lower/upper/exact-threshold, logical-clock, recovery/restart and deadband-bypass tests; Task 19 validity/accessibility E2E matrix |
+| P0-9 Stale/offline | Runtime stale formula; old-boot observation immediately `Stale + LastKnown` until current-boot fresh scan; no cross-boot tick comparison; disconnected state riêng; invalid disables command | ADR-0002, ADR-0006 | 14, 19 | Task 14 fake-clock lower/upper/exact-threshold plus exact boot projection/command-disable/no-cross-boot-comparison/fresh-scan-clear/deadband-bypass assertions; Task 19 validity/accessibility E2E matrix |
 | P0-10 Activation/order | Minimal publish foundation; activation FSM; atomic switch | ADR-0003 | 8, 23 | Activation crash/rollback/reconciliation state-machine tests |
 | P1-1 Clock model | Logical/ingest/source/monotonic/boot/revision + persisted high-water | ADR-0002 | 5 | Clock-step/restart/out-of-order source-time tests |
 | P1-2 Scene L1 authority | JSON Schema/manifest; generated C#/TS; server canonical hash | ADR-0006 | 6 | Shared cross-language conformance corpus |
