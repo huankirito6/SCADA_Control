@@ -14,6 +14,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Scada.TimeoutDescendantFixture\Scada.TimeoutDescendantFixture.csproj" />
+    <Compile Remove="Fixtures\**\*.cs" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <ProcessTreeFixtureProject>$(MSBuildThisFileDirectory)Fixtures\ProcessTreeFixture\ProcessTreeFixture.csproj</ProcessTreeFixtureProject>
+    <ProcessTreeFixtureOutput>$(MSBuildThisFileDirectory)Fixtures\ProcessTreeFixture\bin\$(Configuration)\net10.0\</ProcessTreeFixtureOutput>
+  </PropertyGroup>
+
+  <Target Name="BuildAndCopyProcessTreeFixture" BeforeTargets="Build">
+    <MSBuild Projects="$(ProcessTreeFixtureProject)"
+             Targets="Restore;Build"
+             Properties="Configuration=$(Configuration);RestoreLockedMode=true" />
+    <ItemGroup>
+      <ProcessTreeFixtureFiles Include="$(ProcessTreeFixtureOutput)ProcessTreeFixture.dll" />
+      <ProcessTreeFixtureFiles Include="$(ProcessTreeFixtureOutput)ProcessTreeFixture.deps.json" />
+      <ProcessTreeFixtureFiles Include="$(ProcessTreeFixtureOutput)ProcessTreeFixture.runtimeconfig.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ProcessTreeFixtureFiles)"
+          DestinationFolder="$(OutDir)Fixtures\ProcessTreeFixture\"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

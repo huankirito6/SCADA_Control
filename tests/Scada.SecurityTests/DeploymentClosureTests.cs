@@ -63,68 +63,53 @@ public sealed class DeploymentClosureTests
     }
 
     [Fact]
-    public void TimeoutDescendantFixtureIsBuiltWithSecurityTests()
+    public void ProcessTimeoutKillsManagedFixtureParentAndChildAndDrainsBothStreams()
     {
-        string fixtureAssembly = Path.Combine(AppContext.BaseDirectory, "Scada.TimeoutDescendantFixture.dll");
-
-        Assert.True(
-            File.Exists(fixtureAssembly),
-            $"Expected deterministic .NET timeout fixture assembly: {fixtureAssembly}");
+        for (int iteration = 0; iteration < 5; iteration++)
+        {
+            ProcessTimeoutKillsManagedFixtureParentAndChildAndDrainsBothStreamsOnce();
+        }
     }
 
-    [Fact]
-    public void ProcessTimeoutBoundsTerminationAndOutputDrain()
+    private static void ProcessTimeoutKillsManagedFixtureParentAndChildAndDrainsBothStreamsOnce()
     {
-        string fixtureDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"scada-timeout-fixture-{Guid.NewGuid():N}");
-        string descendantPidFile = Path.Combine(fixtureDirectory, "descendant.pid");
-        int? descendantPid = null;
+        string fixtureDirectory = Path.Combine(Path.GetTempPath(), $"scada-timeout-fixture-{Guid.NewGuid():N}");
+        string parentIdentityFile = Path.Combine(fixtureDirectory, "parent.identity");
+        string childIdentityFile = Path.Combine(fixtureDirectory, "child.identity");
+        FixtureProcessIdentity? parent = null;
+        FixtureProcessIdentity? child = null;
 
         try
         {
             Directory.CreateDirectory(fixtureDirectory);
-            string fixtureProject = Path.Combine(fixtureDirectory, "Hang.proj");
-            string childAssembly = Path.Combine(AppContext.BaseDirectory, "Scada.TimeoutDescendantFixture.dll");
-            Assert.True(File.Exists(childAssembly), $"Expected deterministic .NET timeout fixture assembly: {childAssembly}");
-            string command = $"dotnet \"{childAssembly}\" \"{descendantPidFile}\"";
-            File.WriteAllText(
-                fixtureProject,
-                $"""
-                <Project>
-                  <Target Name="Hang">
-                    <Exec Command="{System.Security.SecurityElement.Escape(command)}" />
-                  </Target>
-                </Project>
-                """);
+            string fixtureAssembly = Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProcessTreeFixture", "ProcessTreeFixture.dll");
+            Assert.True(File.Exists(fixtureAssembly), $"Expected isolated process-tree fixture assembly: {fixtureAssembly}");
 
             Stopwatch stopwatch = Stopwatch.StartNew();
-            XunitException exception = Assert.Throws<XunitException>(
-                () => DeploymentClosure.RunDotNet(
-                    fixtureDirectory,
-                    TimeSpan.FromSeconds(2),
-                    "msbuild",
-                    fixtureProject,
-                    "-t:Hang",
-                    "--nologo"));
+            XunitException exception = Assert.Throws<XunitException>(() => DeploymentClosure.RunDotNet(
+                fixtureDirectory,
+                TimeSpan.FromSeconds(2),
+                fixtureAssembly,
+                "parent",
+                parentIdentityFile,
+                childIdentityFile));
             stopwatch.Stop();
 
-            descendantPid = ReadProcessId(descendantPidFile);
-            Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("descendant-standard-output", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("descendant-standard-error", exception.Message, StringComparison.Ordinal);
-            Assert.False(IsProcessAlive(descendantPid.Value), $"Descendant process {descendantPid} survived timeout cleanup.");
-            Assert.True(
-                stopwatch.Elapsed < TimeSpan.FromSeconds(5),
-                $"Timeout cleanup took {stopwatch.Elapsed}; expected less than 5 seconds.");
+            parent = ReadFixtureIdentity(parentIdentityFile, "parent");
+            child = ReadFixtureIdentity(childIdentityFile, "child");
+            Assert.Contains("fixture-parent-standard-output", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("fixture-parent-standard-error", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("fixture-child-standard-output", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("fixture-child-standard-error", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("Process tree exited: True", exception.Message, StringComparison.Ordinal);
+            Assert.False(IsProcessIdentityAlive(parent), $"Fixture parent {parent} survived timeout cleanup.");
+            Assert.False(IsProcessIdentityAlive(child), $"Fixture child {child} survived timeout cleanup.");
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Timeout cleanup took {stopwatch.Elapsed}; expected less than 5 seconds.");
         }
         finally
         {
-            if (descendantPid is int processId && IsProcessAlive(processId))
-            {
-                Process.GetProcessById(processId).Kill(entireProcessTree: true);
-            }
-
+            KillIfAlive(parent);
+            KillIfAlive(child);
             if (Directory.Exists(fixtureDirectory))
             {
                 Directory.Delete(fixtureDirectory, recursive: true);
@@ -132,32 +117,38 @@ public sealed class DeploymentClosureTests
         }
     }
 
-    private static int ReadProcessId(string path)
+    private static FixtureProcessIdentity ReadFixtureIdentity(string path, string role)
     {
-        Assert.True(File.Exists(path), $"Descendant did not publish its PID at {path}.");
-
-        try
-        {
-            return int.Parse(File.ReadAllText(path).Trim(), System.Globalization.CultureInfo.InvariantCulture);
-        }
-        catch (Exception exception) when (exception is IOException or FormatException or OverflowException)
-        {
-            throw new XunitException($"Descendant published an invalid PID at {path}: {exception.Message}");
-        }
+        Assert.True(File.Exists(path), $"Fixture {role} did not publish identity at {path}.");
+        string[] fields = File.ReadAllLines(path);
+        Assert.Equal(2, fields.Length);
+        return new FixtureProcessIdentity(
+            int.Parse(fields[0], System.Globalization.CultureInfo.InvariantCulture),
+            long.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    private static bool IsProcessAlive(int processId)
+    private static bool IsProcessIdentityAlive(FixtureProcessIdentity identity)
     {
         try
         {
-            using Process process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            using Process process = Process.GetProcessById(identity.ProcessId);
+            return !process.HasExited && process.StartTime.ToUniversalTime().Ticks == identity.StartTimeUtcTicks;
         }
         catch (ArgumentException)
         {
             return false;
         }
     }
+
+    private static void KillIfAlive(FixtureProcessIdentity? identity)
+    {
+        if (identity is { } value && IsProcessIdentityAlive(value))
+        {
+            Process.GetProcessById(value.ProcessId).Kill(entireProcessTree: true);
+        }
+    }
+
+    private sealed record FixtureProcessIdentity(int ProcessId, long StartTimeUtcTicks);
 }
 
 internal static class DeploymentClosure
@@ -264,42 +255,40 @@ internal static class DeploymentClosure
 
         Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
         Task<string> standardError = process.StandardError.ReadToEndAsync();
-        DateTimeOffset commandDeadline = DateTimeOffset.UtcNow + timeoutDuration + TimeoutCleanupBudget;
-        using CancellationTokenSource timeout = new(timeoutDuration);
+        DateTimeOffset operationDeadline = DateTimeOffset.UtcNow + timeoutDuration;
+        DateTimeOffset cleanupDeadline = operationDeadline + TimeoutCleanupBudget;
+
+        if (AwaitWithinDeadline(process.WaitForExitAsync(), operationDeadline))
+        {
+            return new CommandResult(
+                arguments,
+                process.ExitCode,
+                AwaitOutputWithinDeadline(standardOutput, cleanupDeadline),
+                AwaitOutputWithinDeadline(standardError, cleanupDeadline));
+        }
 
         try
         {
-            process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+            process.Kill(entireProcessTree: true);
         }
-        catch (OperationCanceledException)
+        catch (InvalidOperationException)
         {
-            DateTimeOffset cleanupDeadline = commandDeadline;
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // The process exited between the timeout and kill attempt.
-            }
-
-            bool processExited = AwaitWithinDeadline(process.WaitForExitAsync(), cleanupDeadline);
-            string capturedOutput = AwaitOutputWithinDeadline(standardOutput, cleanupDeadline);
-            string capturedError = AwaitOutputWithinDeadline(standardError, cleanupDeadline);
-            CommandResult timedOutResult = new(arguments, -1, capturedOutput, capturedError);
-
-            throw new XunitException(
-                $"dotnet command timed out after {timeoutDuration.TotalSeconds:0.###} seconds: " +
-                $"{FormatCommand(arguments)}{Environment.NewLine}" +
-                $"Process tree exited: {processExited}{Environment.NewLine}" +
-                FormatDiagnostics(timedOutResult));
+            // The process exited between the timeout and kill attempt.
         }
 
-        return new CommandResult(
-            arguments,
-            process.ExitCode,
-            standardOutput.GetAwaiter().GetResult(),
-            standardError.GetAwaiter().GetResult());
+        bool processExited = AwaitWithinDeadline(process.WaitForExitAsync(), cleanupDeadline);
+        string capturedOutput = AwaitOutputWithinDeadline(standardOutput, cleanupDeadline);
+        string capturedError = AwaitOutputWithinDeadline(standardError, cleanupDeadline);
+        ObserveFault(standardOutput);
+        ObserveFault(standardError);
+        CommandResult timedOutResult = new(arguments, -1, capturedOutput, capturedError);
+
+        throw new XunitException(
+            $"dotnet command timed out after {timeoutDuration.TotalSeconds:0.###} seconds: " +
+            $"{FormatCommand(arguments)}{Environment.NewLine}" +
+            $"Process tree exited: {processExited}{Environment.NewLine}" +
+            (processExited ? string.Empty : "Cleanup deadline expired before process tree exit." + Environment.NewLine) +
+            FormatDiagnostics(timedOutResult));
     }
 
     private static bool AwaitWithinDeadline(Task task, DateTimeOffset deadline)
@@ -336,6 +325,14 @@ internal static class DeploymentClosure
         catch (TimeoutException)
         {
             return "<capture deadline exceeded>";
+        }
+    }
+
+    private static void ObserveFault(Task task)
+    {
+        if (task.IsFaulted)
+        {
+            _ = task.Exception;
         }
     }
 
