@@ -68,14 +68,23 @@ public sealed class DeploymentClosureTests
         string fixtureDirectory = Path.Combine(
             Path.GetTempPath(),
             $"scada-timeout-fixture-{Guid.NewGuid():N}");
+        string descendantPidFile = Path.Combine(fixtureDirectory, "descendant.pid");
+        int? descendantPid = null;
 
         try
         {
             Directory.CreateDirectory(fixtureDirectory);
             string fixtureProject = Path.Combine(fixtureDirectory, "Hang.proj");
+            string childScript = Path.Combine(fixtureDirectory, "child.ps1");
+            File.WriteAllText(
+                childScript,
+                "Set-Content -LiteralPath $args[0] -Value $PID; " +
+                "[Console]::Out.WriteLine('descendant-standard-output'); " +
+                "[Console]::Error.WriteLine('descendant-standard-error'); " +
+                "Start-Sleep -Seconds 30");
             string command = OperatingSystem.IsWindows()
-                ? "cmd /c start /b ping -n 30 127.0.0.1 >nul"
-                : "sh -c 'sleep 30 &'";
+                ? $"powershell.exe -NoLogo -NoProfile -File \"{childScript}\" \"{descendantPidFile}\""
+                : $"sh -c 'echo $$ > \"{descendantPidFile}\"; echo descendant-standard-output; echo descendant-standard-error >&2; sleep 30'";
             File.WriteAllText(
                 fixtureProject,
                 $"""
@@ -90,24 +99,52 @@ public sealed class DeploymentClosureTests
             XunitException exception = Assert.Throws<XunitException>(
                 () => DeploymentClosure.RunDotNet(
                     fixtureDirectory,
-                    TimeSpan.FromMilliseconds(250),
+                    TimeSpan.FromSeconds(2),
                     "msbuild",
                     fixtureProject,
                     "-t:Hang",
                     "--nologo"));
             stopwatch.Stop();
 
+            descendantPid = ReadProcessId(descendantPidFile);
             Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("descendant-standard-output", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("descendant-standard-error", exception.Message, StringComparison.Ordinal);
+            Assert.False(IsProcessAlive(descendantPid.Value), $"Descendant process {descendantPid} survived timeout cleanup.");
             Assert.True(
                 stopwatch.Elapsed < TimeSpan.FromSeconds(5),
                 $"Timeout cleanup took {stopwatch.Elapsed}; expected less than 5 seconds.");
         }
         finally
         {
+            if (descendantPid is int processId && IsProcessAlive(processId))
+            {
+                Process.GetProcessById(processId).Kill(entireProcessTree: true);
+            }
+
             if (Directory.Exists(fixtureDirectory))
             {
                 Directory.Delete(fixtureDirectory, recursive: true);
             }
+        }
+    }
+
+    private static int ReadProcessId(string path)
+    {
+        Assert.True(File.Exists(path), $"Descendant did not publish its PID at {path}.");
+        return int.Parse(File.ReadAllText(path).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
         }
     }
 }
@@ -115,6 +152,7 @@ public sealed class DeploymentClosureTests
 internal static class DeploymentClosure
 {
     private static readonly TimeSpan PublishTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan TimeoutCleanupBudget = TimeSpan.FromSeconds(2);
 
     public static void PublishWeb(string repositoryRoot, string webProject, string publishDirectory)
     {
@@ -215,6 +253,7 @@ internal static class DeploymentClosure
 
         Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
         Task<string> standardError = process.StandardError.ReadToEndAsync();
+        DateTimeOffset commandDeadline = DateTimeOffset.UtcNow + timeoutDuration + TimeoutCleanupBudget;
         using CancellationTokenSource timeout = new(timeoutDuration);
 
         try
@@ -223,6 +262,7 @@ internal static class DeploymentClosure
         }
         catch (OperationCanceledException)
         {
+            DateTimeOffset cleanupDeadline = commandDeadline;
             try
             {
                 process.Kill(entireProcessTree: true);
@@ -232,9 +272,16 @@ internal static class DeploymentClosure
                 // The process exited between the timeout and kill attempt.
             }
 
+            bool processExited = AwaitWithinDeadline(process.WaitForExitAsync(), cleanupDeadline);
+            string capturedOutput = AwaitOutputWithinDeadline(standardOutput, cleanupDeadline);
+            string capturedError = AwaitOutputWithinDeadline(standardError, cleanupDeadline);
+            CommandResult timedOutResult = new(arguments, -1, capturedOutput, capturedError);
+
             throw new XunitException(
                 $"dotnet command timed out after {timeoutDuration.TotalSeconds:0.###} seconds: " +
-                FormatCommand(arguments));
+                $"{FormatCommand(arguments)}{Environment.NewLine}" +
+                $"Process tree exited: {processExited}{Environment.NewLine}" +
+                FormatDiagnostics(timedOutResult));
         }
 
         return new CommandResult(
@@ -242,6 +289,43 @@ internal static class DeploymentClosure
             process.ExitCode,
             standardOutput.GetAwaiter().GetResult(),
             standardError.GetAwaiter().GetResult());
+    }
+
+    private static bool AwaitWithinDeadline(Task task, DateTimeOffset deadline)
+    {
+        TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return task.IsCompletedSuccessfully;
+        }
+
+        try
+        {
+            task.WaitAsync(remaining).GetAwaiter().GetResult();
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static string AwaitOutputWithinDeadline(Task<string> output, DateTimeOffset deadline)
+    {
+        TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return output.IsCompletedSuccessfully ? output.Result : "<capture deadline exceeded>";
+        }
+
+        try
+        {
+            return output.WaitAsync(remaining).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException)
+        {
+            return "<capture deadline exceeded>";
+        }
     }
 
     private static string FormatDiagnostics(CommandResult result)
