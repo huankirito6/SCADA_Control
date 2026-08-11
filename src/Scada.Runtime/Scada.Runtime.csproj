@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Scada.Application/Scada.Application.csproj" />
+    <ProjectReference Include="../Scada.Contracts/Scada.Contracts.csproj" />
+    <ProjectReference Include="../Scada.Infrastructure.Sqlite/Scada.Infrastructure.Sqlite.csproj" />
+    <ProjectReference Include="../Scada.Drivers.Abstractions/Scada.Drivers.Abstractions.csproj" />
+    <ProjectReference Include="../Scada.Drivers.Simulator/Scada.Drivers.Simulator.csproj" />
+    <ProjectReference Include="../Scada.Drivers.ModbusTcp/Scada.Drivers.ModbusTcp.csproj" />
+    <ProjectReference Include="../Scada.Drivers.ModbusRtu/Scada.Drivers.ModbusRtu.csproj" />
+    <ProjectReference Include="../Scada.Drivers.OpcUa/Scada.Drivers.OpcUa.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "scada.application": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Domain": "[1.0.0, )"
+        }
+      },
+      "scada.contracts": {
+        "type": "Project"
+      },
+      "scada.domain": {
+        "type": "Project"
+      },
+      "scada.drivers.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Domain": "[1.0.0, )"
+        }
+      },
+      "scada.drivers.simulator": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Drivers.Abstractions": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

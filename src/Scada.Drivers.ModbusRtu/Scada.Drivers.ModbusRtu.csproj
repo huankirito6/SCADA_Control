@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Scada.Drivers.Abstractions/Scada.Drivers.Abstractions.csproj" />
+  </ItemGroup>
+</Project>
