@@ -10,13 +10,24 @@ public sealed class TagIdTests
         var value = default(TagId);
 
         Assert.False(value.IsValid);
-        Assert.Equal(0L, value.Value);
+        var valueException = Assert.Throws<InvalidOperationException>(() => _ = value.Value);
+        Assert.Contains("invalid", valueException.Message, StringComparison.OrdinalIgnoreCase);
+
+        var requireException = Assert.Throws<InvalidOperationException>(() => value.RequireValid());
+        Assert.Contains("invalid", requireException.Message, StringComparison.OrdinalIgnoreCase);
 
         Assert.NotEqual(value, new TagId(1));
     }
 
     [Fact]
-    public void PositiveSigned64ValueIsPreserved() => Assert.Equal(long.MaxValue, new TagId(long.MaxValue).Value);
+    public void PositiveSigned64ValueIsPreserved()
+    {
+        var value = new TagId(long.MaxValue);
+
+        Assert.True(value.IsValid);
+        Assert.Equal(long.MaxValue, value.Value);
+        Assert.Equal(long.MaxValue, value.RequireValid());
+    }
 
     [Theory]
     [InlineData(0L)]

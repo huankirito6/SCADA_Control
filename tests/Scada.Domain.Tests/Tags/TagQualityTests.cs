@@ -38,19 +38,22 @@ public sealed class TagQualityTests
     [InlineData(42U, null, 42U)]
     [InlineData(null, 7U, 7U)]
     [InlineData(42U, 42U, 42U)]
-    [InlineData(42U, 7U, null)]
     public void CombinePreservesOnlyUnambiguousNativeStatus(uint? leftStatus, uint? rightStatus, uint? expected)
     {
         var left = new TagQuality(QualitySeverity.Good, QualityReason.LastKnown, leftStatus);
         var right = new TagQuality(QualitySeverity.Uncertain, QualityReason.CommFail, rightStatus);
 
-        if (leftStatus.HasValue && rightStatus.HasValue && leftStatus != rightStatus)
-        {
-            Assert.Throws<InvalidOperationException>(() => TagQuality.Combine(left, right));
-            return;
-        }
-
         Assert.Equal(expected, TagQuality.Combine(left, right).NativeStatus);
+    }
+
+    [Fact]
+    public void CombineRejectsConflictingNativeStatuses()
+    {
+        var left = new TagQuality(QualitySeverity.Good, QualityReason.LastKnown, 42U);
+        var right = new TagQuality(QualitySeverity.Uncertain, QualityReason.CommFail, 7U);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => TagQuality.Combine(left, right));
+        Assert.Contains("conflicting native quality statuses", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
