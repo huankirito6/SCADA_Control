@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Deterministic Condition="'$(Configuration)' == 'Release'">false</Deterministic>
+  </PropertyGroup>
+</Project>
