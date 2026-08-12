@@ -93,6 +93,12 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "scada.application": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Domain": "[1.0.0, )"
+        }
+      },
       "scada.domain": {
         "type": "Project"
       }

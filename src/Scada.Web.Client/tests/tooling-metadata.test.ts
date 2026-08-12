@@ -51,5 +51,5 @@ test("enforces strict no-emit TypeScript checks through npm test", async () => {
   assert.match(manifest.scripts.test, /npm run lint/);
   assert.equal(tsconfig.compilerOptions.strict, true);
   assert.equal(tsconfig.compilerOptions.noEmit, true);
-  assert.deepEqual(tsconfig.include, ["tests/**/*.ts"]);
+  assert.deepEqual(tsconfig.include, ["src/**/*.ts", "tests/**/*.ts"]);
 });

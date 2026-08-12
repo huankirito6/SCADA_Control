@@ -15,5 +15,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Scada.Domain/Scada.Domain.csproj" />
+    <ProjectReference Include="../../src/Scada.Application/Scada.Application.csproj" />
   </ItemGroup>
 </Project>

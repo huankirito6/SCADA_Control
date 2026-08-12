@@ -1,0 +1,20 @@
+{
+  "expectedValid": true,
+  "scene": {
+    "schemaVersion": 1,
+    "revision": 7,
+    "screenId": "line-1-overview",
+    "canvas": { "width": 1920, "height": 1080, "viewBox": { "x": 0, "y": 0, "width": 1920, "height": 1080 } },
+    "layers": ["background", "process"],
+    "symbols": [{ "id": "motor-symbol", "rootElementId": "motor-body" }],
+    "elements": [
+      { "id": "background", "kind": "group", "layer": "background", "geometry": { "kind": "box", "x": 0, "y": 0, "w": 1920, "h": 1080, "rotation": 0 } },
+      { "id": "process", "kind": "group", "layer": "process", "geometry": { "kind": "box", "x": 10, "y": 10, "w": 1800, "h": 900, "rotation": 0 } },
+      { "id": "motor-body", "kind": "widget", "parentId": "process", "widgetType": "motor", "geometry": { "kind": "box", "x": 12.5, "y": 50, "w": 120, "h": 80, "rotation": 0 }, "bindings": [{ "tier": "direct", "tag": "line-1-motor-running", "target": "attr:fill" }], "actions": [{ "kind": "command", "commandId": "start-motor", "parameters": { "mode": "auto" } }] },
+      { "id": "pipe-a", "kind": "widget", "parentId": "process", "widgetType": "pipe", "geometry": { "kind": "points", "vertices": [{ "x": 100, "y": 100 }, { "x": 300, "y": 100 }] } },
+      { "id": "pipe-b", "kind": "widget", "parentId": "process", "widgetType": "pipe", "geometry": { "kind": "path", "segments": [{ "kind": "move", "x": 300, "y": 100 }, { "kind": "line", "x": 500, "y": 160 }] } },
+      { "id": "pipe-link", "kind": "widget", "parentId": "process", "widgetType": "connector", "geometry": { "kind": "link", "fromRef": "pipe-a", "toRef": "pipe-b", "routing": "orthogonal" } },
+      { "id": "motor-instance", "kind": "instance", "parentId": "process", "symbolId": "motor-symbol", "tagScope": { "line": "line-1", "unit": "pump-a" }, "geometry": { "kind": "box", "x": 700, "y": 100, "w": 120, "h": 80, "rotation": 0 } }
+    ]
+  }
+}
