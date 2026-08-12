@@ -274,18 +274,7 @@ Slice 2 cần publish-time validation trong khi config version/publish ở slice
 - Không release nếu restore/upgrade rehearsal, egress-deny và HIL support matrix chưa pass.
 - Không claim IEC 62443 compliance/certification khi chưa có evidence độc lập.
 
-## Final authority fix round — Task 6
-
-**Scope:** Close the carried Important finding that geometry enforcement literals and property shapes could silently diverge among the manifest, Draft 2020-12 schema, C# canonicalizer, and generated TypeScript validator.
-
-- Added `geometry` policy to the existing authoritative `widget-manifest.json`: box/point/points/path/link required and allowed fields, points minimum/maximum, path maximum, and path-segment kinds.
-- C# `SceneCanonicalizer` now consumes that geometry policy for every geometry field set, point/path bounds, and path-segment-kind allowlist. The TypeScript generated validator consumes the same JSON policy for the corresponding client enforcement; the schema remains the separately embedded Draft 2020-12 contract.
-- Added `ManifestMakesEveryGeometryShapeAndBoundSchemaAuthoritative`, which deterministically parses both embedded manifest and schema and checks every geometry required/allowed set, points min/max, path maximum, and the exact path segment enum. This makes a schema/manifest drift fail locally before either validator can silently diverge.
-
-**Strict TDD evidence:** The new focused test first ran RED against the old manifest, failing with `KeyNotFoundException` at `geometry` (`SceneCorpusTests.cs:52`); this assertion-level failure demonstrated the missing authority policy. After adding the manifest policy and consuming it in both validators, the same focused test was GREEN: **1/1 passed**.
-
-**Final verification:** `dotnet test tests/Scada.Domain.Tests/Scada.Domain.Tests.csproj --filter SceneCorpusTests --no-restore` (**6/6**); `npm test -- scene-corpus.test.ts` (typecheck, lint, **5/5**); `dotnet test Scada.sln --no-restore` (Domain **57/57**, Integration **2/2**, Security **3/3**, Runtime **16/16**, Architecture **8/8**); `git diff --check` passed.
-
+## Nguồn kỹ thuật đã kiểm chứng
 
 - [.NET 10 là LTS đang active](https://dotnet.microsoft.com/en-us/platform/support/policy).
 - [Blazor static SSR không có interactivity/circuit](https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes?view=aspnetcore-10.0).
