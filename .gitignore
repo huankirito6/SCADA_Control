@@ -16,6 +16,9 @@ npm-debug.log*
 artifacts/
 coverage/
 
+# Local Git worktrees
+.worktrees/
+
 # Editors and operating systems
 .vscode/
 .idea/
