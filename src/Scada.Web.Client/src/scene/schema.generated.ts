@@ -3,6 +3,7 @@ import manifest from "../../../Scada.Contracts/Scenes/widget-manifest.json" with
 export type SceneValidationResult = { readonly valid: boolean; readonly error?: string };
 type JsonObject = Record<string, unknown>;
 const widgets = new Set(manifest.widgetTypes), targets = new Set(manifest.bindingTargets), actions = new Set(manifest.actionKinds);
+const maximumNumberLexemeLength = 64, maximumNumberExponentMagnitude = 64, maximumCanonicalNumberLength = 64;
 const id = (v: unknown): v is string => typeof v === "string" && new RegExp(`^[A-Za-z0-9_-]{1,${manifest.limits.stringLength}}$`).test(v);
 const object = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -10,6 +11,32 @@ const only = (v: JsonObject, keys: readonly string[]) => Object.keys(v).every((k
 const safeString = new RegExp(manifest.values.safeStringPattern);
 const safeScalar = (v: unknown) => (typeof v === "string" && v.length > 0 && v.length <= manifest.limits.stringLength && safeString.test(v)) || finite(v) || typeof v === "boolean";
 const safeMap = (v: unknown) => object(v) && Object.entries(v).every(([key, item]) => id(key) && safeScalar(item));
+
+function numericLexemeWithinLimits(raw: string): boolean {
+  if (raw.length > maximumNumberLexemeLength) return false;
+  const exponentAt = raw.search(/[eE]/);
+  if (exponentAt < 0) return raw.length <= maximumCanonicalNumberLength;
+  const exponent = Number(raw.slice(exponentAt + 1));
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > maximumNumberExponentMagnitude) return false;
+  const [mantissa] = raw.split(/[eE]/);
+  const digits = mantissa.replace(/[-.]/g, "").replace(/^0+/, "").replace(/0+$/, "") || "0";
+  const fractionDigits = (mantissa.split(".")[1] ?? "").length;
+  const scale = exponent - fractionDigits;
+  const outputLength = scale >= 0 ? digits.length + scale : Math.max(digits.length - scale + 1, -scale + 2);
+  return outputLength + (raw.startsWith("-") ? 1 : 0) <= maximumCanonicalNumberLength;
+}
+
+export function validateSceneJson(sceneJson: string): SceneValidationResult {
+  let inString = false, escaped = false;
+  const number = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  for (let index = 0; index < sceneJson.length; index += 1) {
+    const character = sceneJson[index];
+    if (inString) { if (escaped) escaped = false; else if (character === "\\") escaped = true; else if (character === "\"") inString = false; continue; }
+    if (character === "\"") { inString = true; continue; }
+    if (character === "-" || (character >= "0" && character <= "9")) { number.lastIndex = index; const match = number.exec(sceneJson); if (!match || !numericLexemeWithinLimits(match[0])) return { valid: false, error: "Number lexeme exceeds the allowed limits." }; index = number.lastIndex - 1; }
+  }
+  try { return validateScene(JSON.parse(sceneJson)); } catch { return { valid: false, error: "Invalid JSON." }; }
+}
 
 function geometry(v: unknown, links: string[][]): boolean {
   if (!object(v)) return false;

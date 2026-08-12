@@ -13,6 +13,9 @@ public sealed record SceneCanonicalizationResult(bool IsValid, byte[]? Canonical
 
 public sealed class SceneCanonicalizer : ISceneCanonicalizer
 {
+    private const int MaximumNumberLexemeLength = 64;
+    private const int MaximumNumberExponentMagnitude = 64;
+    private const int MaximumCanonicalNumberLength = 64;
     private static readonly SceneManifest Contract = SceneContract.Manifest;
     private static readonly HashSet<string> WidgetTypes = Contract.WidgetTypes.ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<string> Targets = Contract.BindingTargets.ToHashSet(StringComparer.Ordinal);
@@ -89,6 +92,7 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
 
     internal static string NormalizeNumber(string raw)
     {
+        ValidateNumberLexeme(raw);
         var index = 0; var negative = raw[index] == '-'; if (negative) index++;
         var exponentAt = raw.IndexOfAny(['e', 'E'], index); var mantissaEnd = exponentAt < 0 ? raw.Length : exponentAt;
         var dot = raw.IndexOf('.', index, mantissaEnd - index); var integerEnd = dot < 0 ? mantissaEnd : dot;
@@ -103,6 +107,10 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
         if (digits.Length == 0) return "0";
         digits = BigInteger.Parse(digits, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
         while (digits.Length > 1 && digits[^1] == '0') { digits = digits[..^1]; scale++; }
+        var outputLength = scale >= 0
+            ? checked(digits.Length + scale)
+            : Math.Max(checked(digits.Length - scale + 1), checked(-scale + 2));
+        if (outputLength + (negative ? 1 : 0) > MaximumCanonicalNumberLength) throw new ArgumentException("Canonical number exceeds the allowed length.");
         var output = scale >= 0 ? digits + new string('0', scale) : WriteDecimal(digits, -scale);
         return negative ? "-" + output : output;
     }
@@ -112,8 +120,15 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
     private static void RequireOnly(JsonElement e, params string[] names) { foreach (var p in e.EnumerateObject()) if (!names.Contains(p.Name, StringComparer.Ordinal)) throw new ArgumentException($"Unknown property {p.Name}."); }
     private static void RequireObject(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Object) throw new ArgumentException($"{name} must be an object."); }
     private static void RequireArray(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Array) throw new ArgumentException($"{name} must be an array."); }
-    private static void FiniteNumber(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Number || !double.IsFinite(e.GetDouble())) throw new ArgumentException($"{name} must be finite."); }
+    private static void FiniteNumber(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Number) throw new ArgumentException($"{name} must be finite."); ValidateNumberLexeme(e.GetRawText()); if (!double.IsFinite(e.GetDouble())) throw new ArgumentException($"{name} must be finite."); }
     private static void PositiveNumber(JsonElement e, string name) { FiniteNumber(e, name); if (e.GetDouble() <= 0) throw new ArgumentException($"{name} must be positive."); }
+    private static void ValidateNumberLexeme(string raw)
+    {
+        if (raw.Length > MaximumNumberLexemeLength) throw new ArgumentException("Number lexeme exceeds the allowed length.");
+        var exponentAt = raw.IndexOfAny(['e', 'E']);
+        if (exponentAt < 0) return;
+        if (!int.TryParse(raw[(exponentAt + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var exponent) || Math.Abs((long)exponent) > MaximumNumberExponentMagnitude) throw new ArgumentException("Number exponent exceeds the allowed magnitude.");
+    }
     private static void ValidateId(string? value, string name) { if (!IsId(value)) throw new ArgumentException($"Invalid {name}."); }
     private static bool IsId(string? value) => !string.IsNullOrEmpty(value) && value.Length <= Contract.Limits.StringLength && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 }

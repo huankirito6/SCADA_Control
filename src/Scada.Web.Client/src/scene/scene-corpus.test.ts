@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
-import { validateScene } from "./schema.generated.ts";
+import { validateScene, validateSceneJson } from "./schema.generated.ts";
 
 const corpusDirectory = new URL("../../../../tests/fixtures/scenes/schema-v1/", import.meta.url);
 
@@ -11,8 +11,10 @@ test("TypeScript validator accepts and rejects the shared corpus", async () => {
   const names = (await readdir(corpusDirectory)).filter((name) => name.endsWith(".json")).sort();
 
   for (const name of names) {
-    const fixture = JSON.parse(await readFile(new URL(name, corpusDirectory), "utf8")) as Fixture;
-    assert.equal(validateScene(fixture.scene).valid, fixture.expectedValid, name);
+    const fixtureText = await readFile(new URL(name, corpusDirectory), "utf8");
+    const fixture = JSON.parse(fixtureText) as Fixture;
+    const sceneJson = fixtureText.slice(fixtureText.indexOf("\"scene\":") + "\"scene\":".length, -1);
+    assert.equal(validateSceneJson(sceneJson).valid, fixture.expectedValid, name);
   }
 });
 
