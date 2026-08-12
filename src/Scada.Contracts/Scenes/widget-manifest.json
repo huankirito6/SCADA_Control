@@ -25,6 +25,13 @@
     "safeStringPattern": "^[A-Za-z0-9 _.#%+,-]+$",
     "safeStringRationale": "ASCII display tokens only: excludes markup delimiters, URL separators, quotes, escapes, and executable syntax."
   },
+  "geometry": {
+    "box": { "required": ["kind", "x", "y", "w", "h", "rotation"], "allowed": ["kind", "x", "y", "w", "h", "rotation"] },
+    "point": { "required": ["x", "y"], "allowed": ["x", "y"] },
+    "points": { "required": ["kind", "vertices"], "allowed": ["kind", "vertices"], "array": { "minItems": 2, "maxItems": 4 } },
+    "path": { "required": ["kind", "segments"], "allowed": ["kind", "segments"], "array": { "maxItems": 4, "item": { "required": ["kind", "x", "y"], "allowed": ["kind", "x", "y"], "kinds": ["move", "line"] } } },
+    "link": { "required": ["kind", "fromRef", "toRef", "routing"], "allowed": ["kind", "fromRef", "toRef", "routing"] }
+  },
   "elementOwnership": {
     "group": ["id", "kind", "parentId", "layer", "geometry"],
     "widget": ["id", "kind", "parentId", "layer", "widgetType", "geometry", "bindings", "actions", "props"],

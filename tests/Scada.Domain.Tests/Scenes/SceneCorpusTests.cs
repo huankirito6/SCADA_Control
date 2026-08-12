@@ -44,6 +44,43 @@ public sealed class SceneCorpusTests
     }
 
     [Fact]
+    public void ManifestMakesEveryGeometryShapeAndBoundSchemaAuthoritative()
+    {
+        using var schema = System.Text.Json.JsonDocument.Parse(LoadContractResource("Scada.Contracts.Scenes.scene.schema.json"));
+        using var manifest = System.Text.Json.JsonDocument.Parse(LoadContractResource("Scada.Contracts.Scenes.widget-manifest.json"));
+        var definitions = schema.RootElement.GetProperty("$defs");
+        var geometry = manifest.RootElement.GetProperty("geometry");
+
+        AssertShape(geometry.GetProperty("box"), definitions.GetProperty("box"));
+        AssertShape(geometry.GetProperty("points"), definitions.GetProperty("points"));
+        AssertShape(geometry.GetProperty("path"), definitions.GetProperty("path"));
+        AssertShape(geometry.GetProperty("link"), definitions.GetProperty("link"));
+
+        var point = geometry.GetProperty("point");
+        Assert.Equal(point.GetProperty("required").EnumerateArray().Select(static x => x.GetString()), definitions.GetProperty("point").GetProperty("required").EnumerateArray().Select(static x => x.GetString()));
+        Assert.Equal(point.GetProperty("allowed").EnumerateArray().Select(static x => x.GetString()).OrderBy(static x => x).ToArray(), definitions.GetProperty("point").GetProperty("properties").EnumerateObject().Select(static x => x.Name).OrderBy(static x => x).ToArray());
+
+        var vertices = geometry.GetProperty("points").GetProperty("array");
+        var schemaVertices = definitions.GetProperty("points").GetProperty("properties").GetProperty("vertices");
+        Assert.Equal(vertices.GetProperty("minItems").GetInt32(), schemaVertices.GetProperty("minItems").GetInt32());
+        Assert.Equal(vertices.GetProperty("maxItems").GetInt32(), schemaVertices.GetProperty("maxItems").GetInt32());
+
+        var segments = geometry.GetProperty("path").GetProperty("array");
+        var schemaSegments = definitions.GetProperty("path").GetProperty("properties").GetProperty("segments");
+        Assert.Equal(segments.GetProperty("maxItems").GetInt32(), schemaSegments.GetProperty("maxItems").GetInt32());
+        var segment = segments.GetProperty("item");
+        Assert.Equal(segment.GetProperty("required").EnumerateArray().Select(static x => x.GetString()), schemaSegments.GetProperty("items").GetProperty("required").EnumerateArray().Select(static x => x.GetString()));
+        Assert.Equal(segment.GetProperty("allowed").EnumerateArray().Select(static x => x.GetString()).OrderBy(static x => x).ToArray(), schemaSegments.GetProperty("items").GetProperty("properties").EnumerateObject().Select(static x => x.Name).OrderBy(static x => x).ToArray());
+        Assert.Equal(segment.GetProperty("kinds").EnumerateArray().Select(static x => x.GetString()), schemaSegments.GetProperty("items").GetProperty("properties").GetProperty("kind").GetProperty("enum").EnumerateArray().Select(static x => x.GetString()));
+    }
+
+    private static void AssertShape(System.Text.Json.JsonElement manifestShape, System.Text.Json.JsonElement schemaShape)
+    {
+        Assert.Equal(manifestShape.GetProperty("required").EnumerateArray().Select(static x => x.GetString()), schemaShape.GetProperty("required").EnumerateArray().Select(static x => x.GetString()));
+        Assert.Equal(manifestShape.GetProperty("allowed").EnumerateArray().Select(static x => x.GetString()).OrderBy(static x => x).ToArray(), schemaShape.GetProperty("properties").EnumerateObject().Select(static x => x.Name).OrderBy(static x => x).ToArray());
+    }
+
+    [Fact]
     public void ServerCanonicalBytesAndHashAreCultureStableAndPreserveNumericMeaning()
     {        var scene = LoadScene("valid-complex.json");
         var canonicalizer = new SceneCanonicalizer();

@@ -10,6 +10,7 @@ public sealed record SceneManifest(
     string[] RoutingKinds,
     SceneLimits Limits,
     SceneValuePolicy Values,
+    SceneGeometryPolicy Geometry,
     Dictionary<string, string[]> ElementOwnership,
     Dictionary<string, SceneShape> Bindings,
     Dictionary<string, SceneShape> Actions);
@@ -18,6 +19,12 @@ public sealed record SceneLimits(int Elements, int Nesting, int Vertices, int Se
 
 /// <summary>ASCII display tokens deliberately exclude markup delimiters, URL separators, quotes, escapes, and executable syntax.</summary>
 public sealed record SceneValuePolicy(string SafeStringPattern, string SafeStringRationale);
+public sealed record SceneGeometryPolicy(SceneShape Box, SceneShape Point, SceneArrayShape Points, ScenePathShape Path, SceneShape Link);
+public sealed record SceneArrayShape(string[] Required, string[] Allowed, SceneArrayBounds Array);
+public sealed record ScenePathShape(string[] Required, string[] Allowed, ScenePathArray Array);
+public sealed record SceneArrayBounds(int MinItems, int MaxItems);
+public sealed record ScenePathArray(int MaxItems, ScenePathSegmentShape Item);
+public sealed record ScenePathSegmentShape(string[] Required, string[] Allowed, string[] Kinds);
 public sealed record SceneShape(string[] Required, string[] Allowed);
 
 public static class SceneContract

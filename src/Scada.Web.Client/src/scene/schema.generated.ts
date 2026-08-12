@@ -3,6 +3,8 @@ import manifest from "../../../Scada.Contracts/Scenes/widget-manifest.json" with
 export type SceneValidationResult = { readonly valid: boolean; readonly error?: string };
 type JsonObject = Record<string, unknown>;
 const widgets = new Set(manifest.widgetTypes), targets = new Set(manifest.bindingTargets), actions = new Set(manifest.actionKinds), routingKinds = new Set(manifest.routingKinds);
+const geometryPolicy = manifest.geometry;
+const pathSegmentKinds = new Set(geometryPolicy.path.array.item.kinds);
 const { numberLexemeLength: maximumNumberLexemeLength, numberExponentMagnitude: maximumNumberExponentMagnitude, canonicalNumberLength: maximumCanonicalNumberLength } = manifest.limits;
 const id = (v: unknown): v is string => typeof v === "string" && new RegExp(`^[A-Za-z0-9_-]{1,${manifest.limits.stringLength}}$`).test(v);
 const object = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -49,10 +51,10 @@ export function validateSceneJson(sceneJson: string): SceneValidationResult {
 
 function geometry(v: unknown, links: string[][]): boolean {
   if (!object(v)) return false;
-  if (v.kind === "box") return only(v, ["kind", "x", "y", "w", "h", "rotation"]) && [v.x, v.y, v.w, v.h, v.rotation].every(finite) && (v.w as number) > 0 && (v.h as number) > 0;
-  if (v.kind === "points") return only(v, ["kind", "vertices"]) && Array.isArray(v.vertices) && v.vertices.length >= 2 && v.vertices.length <= manifest.limits.vertices && v.vertices.every((p) => object(p) && only(p, ["x", "y"]) && finite(p.x) && finite(p.y));
-  if (v.kind === "path") return only(v, ["kind", "segments"]) && Array.isArray(v.segments) && v.segments.length <= manifest.limits.segments && v.segments.every((s) => object(s) && only(s, ["kind", "x", "y"]) && (s.kind === "move" || s.kind === "line") && finite(s.x) && finite(s.y));
-  if (v.kind === "link" && only(v, ["kind", "fromRef", "toRef", "routing"]) && id(v.fromRef) && id(v.toRef) && typeof v.routing === "string" && routingKinds.has(v.routing)) { links.push([v.fromRef, v.toRef]); return true; }
+  if (v.kind === "box") return only(v, geometryPolicy.box.allowed) && geometryPolicy.box.required.every((key) => key in v) && [v.x, v.y, v.w, v.h, v.rotation].every(finite) && (v.w as number) > 0 && (v.h as number) > 0;
+  if (v.kind === "points") return only(v, geometryPolicy.points.allowed) && geometryPolicy.points.required.every((key) => key in v) && Array.isArray(v.vertices) && v.vertices.length >= geometryPolicy.points.array.minItems && v.vertices.length <= geometryPolicy.points.array.maxItems && v.vertices.every((p) => object(p) && only(p, geometryPolicy.point.allowed) && geometryPolicy.point.required.every((key) => key in p) && finite(p.x) && finite(p.y));
+  if (v.kind === "path") return only(v, geometryPolicy.path.allowed) && geometryPolicy.path.required.every((key) => key in v) && Array.isArray(v.segments) && v.segments.length <= geometryPolicy.path.array.maxItems && v.segments.every((s) => object(s) && only(s, geometryPolicy.path.array.item.allowed) && geometryPolicy.path.array.item.required.every((key) => key in s) && typeof s.kind === "string" && pathSegmentKinds.has(s.kind) && finite(s.x) && finite(s.y));
+  if (v.kind === "link" && only(v, geometryPolicy.link.allowed) && geometryPolicy.link.required.every((key) => key in v) && id(v.fromRef) && id(v.toRef) && typeof v.routing === "string" && routingKinds.has(v.routing)) { links.push([v.fromRef, v.toRef]); return true; }
   return false;
 }
 
