@@ -25,12 +25,15 @@
     "safeStringPattern": "^[A-Za-z0-9 _.#%+,-]+$",
     "safeStringRationale": "ASCII display tokens only: excludes markup delimiters, URL separators, quotes, escapes, and executable syntax."
   },
+  "scene": { "required": ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"], "allowed": ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"], "minimum": { "revision": 0 } },
+  "canvas": { "required": ["width", "height", "viewBox"], "allowed": ["width", "height", "viewBox"], "positive": ["width", "height"], "viewBox": { "required": ["x", "y", "width", "height"], "allowed": ["x", "y", "width", "height"], "positive": ["width", "height"] } },
+  "symbol": { "required": ["rootElementId"], "allowed": ["rootElementId"] },
   "geometry": {
-    "box": { "required": ["kind", "x", "y", "w", "h", "rotation"], "allowed": ["kind", "x", "y", "w", "h", "rotation"] },
+    "box": { "kind": "box", "required": ["kind", "x", "y", "w", "h", "rotation"], "allowed": ["kind", "x", "y", "w", "h", "rotation"], "positive": ["w", "h"] },
     "point": { "required": ["x", "y"], "allowed": ["x", "y"] },
-    "points": { "required": ["kind", "vertices"], "allowed": ["kind", "vertices"], "array": { "minItems": 2, "maxItems": 4 } },
-    "path": { "required": ["kind", "segments"], "allowed": ["kind", "segments"], "array": { "maxItems": 4, "item": { "required": ["kind", "x", "y"], "allowed": ["kind", "x", "y"], "kinds": ["move", "line"] } } },
-    "link": { "required": ["kind", "fromRef", "toRef", "routing"], "allowed": ["kind", "fromRef", "toRef", "routing"] }
+    "points": { "kind": "points", "required": ["kind", "vertices"], "allowed": ["kind", "vertices"], "array": { "minItems": 2, "maxItems": 4 } },
+    "path": { "kind": "path", "required": ["kind", "segments"], "allowed": ["kind", "segments"], "array": { "maxItems": 4, "item": { "required": ["kind", "x", "y"], "allowed": ["kind", "x", "y"], "kinds": ["move", "line"] } } },
+    "link": { "kind": "link", "required": ["kind", "fromRef", "toRef", "routing"], "allowed": ["kind", "fromRef", "toRef", "routing"] }
   },
   "elementOwnership": {
     "group": ["id", "kind", "parentId", "layer", "geometry"],

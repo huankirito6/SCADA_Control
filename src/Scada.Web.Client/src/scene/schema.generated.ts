@@ -51,10 +51,10 @@ export function validateSceneJson(sceneJson: string): SceneValidationResult {
 
 function geometry(v: unknown, links: string[][]): boolean {
   if (!object(v)) return false;
-  if (v.kind === "box") return only(v, geometryPolicy.box.allowed) && geometryPolicy.box.required.every((key) => key in v) && [v.x, v.y, v.w, v.h, v.rotation].every(finite) && (v.w as number) > 0 && (v.h as number) > 0;
-  if (v.kind === "points") return only(v, geometryPolicy.points.allowed) && geometryPolicy.points.required.every((key) => key in v) && Array.isArray(v.vertices) && v.vertices.length >= geometryPolicy.points.array.minItems && v.vertices.length <= geometryPolicy.points.array.maxItems && v.vertices.every((p) => object(p) && only(p, geometryPolicy.point.allowed) && geometryPolicy.point.required.every((key) => key in p) && finite(p.x) && finite(p.y));
-  if (v.kind === "path") return only(v, geometryPolicy.path.allowed) && geometryPolicy.path.required.every((key) => key in v) && Array.isArray(v.segments) && v.segments.length <= geometryPolicy.path.array.maxItems && v.segments.every((s) => object(s) && only(s, geometryPolicy.path.array.item.allowed) && geometryPolicy.path.array.item.required.every((key) => key in s) && typeof s.kind === "string" && pathSegmentKinds.has(s.kind) && finite(s.x) && finite(s.y));
-  if (v.kind === "link" && only(v, geometryPolicy.link.allowed) && geometryPolicy.link.required.every((key) => key in v) && id(v.fromRef) && id(v.toRef) && typeof v.routing === "string" && routingKinds.has(v.routing)) { links.push([v.fromRef, v.toRef]); return true; }
+  if (v.kind === geometryPolicy.box.kind) return only(v, geometryPolicy.box.allowed) && geometryPolicy.box.required.every((key) => key in v) && [v.x, v.y, v.w, v.h, v.rotation].every(finite) && geometryPolicy.box.positive.every((key) => (v[key] as number) > 0);
+  if (v.kind === geometryPolicy.points.kind) return only(v, geometryPolicy.points.allowed) && geometryPolicy.points.required.every((key) => key in v) && Array.isArray(v.vertices) && v.vertices.length >= geometryPolicy.points.array.minItems && v.vertices.length <= geometryPolicy.points.array.maxItems && v.vertices.every((p) => object(p) && only(p, geometryPolicy.point.allowed) && geometryPolicy.point.required.every((key) => key in p) && finite(p.x) && finite(p.y));
+  if (v.kind === geometryPolicy.path.kind) return only(v, geometryPolicy.path.allowed) && geometryPolicy.path.required.every((key) => key in v) && Array.isArray(v.segments) && v.segments.length <= geometryPolicy.path.array.maxItems && v.segments.every((s) => object(s) && only(s, geometryPolicy.path.array.item.allowed) && geometryPolicy.path.array.item.required.every((key) => key in s) && typeof s.kind === "string" && pathSegmentKinds.has(s.kind) && finite(s.x) && finite(s.y));
+  if (v.kind === geometryPolicy.link.kind && only(v, geometryPolicy.link.allowed) && geometryPolicy.link.required.every((key) => key in v) && id(v.fromRef) && id(v.toRef) && typeof v.routing === "string" && routingKinds.has(v.routing)) { links.push([v.fromRef, v.toRef]); return true; }
   return false;
 }
 
@@ -63,8 +63,14 @@ function validBindings(v: unknown): boolean {
 }
 function validActions(v: unknown): boolean { return Array.isArray(v) && v.every((a) => object(a) && typeof a.kind === "string" && actions.has(a.kind) && id(a.commandId) && only(a, manifest.actions.command.allowed) && manifest.actions.command.required.every((key) => key in a) && safeMap(a.parameters)); }
 
+function validCanvas(v: unknown): boolean {
+  if (!object(v) || !only(v, manifest.canvas.allowed) || !manifest.canvas.required.every((key) => key in v) || !finite(v.width) || !finite(v.height) || !manifest.canvas.positive.every((key) => (v[key] as number) > 0)) return false;
+  const viewBox = v.viewBox;
+  return object(viewBox) && only(viewBox, manifest.canvas.viewBox.allowed) && manifest.canvas.viewBox.required.every((key) => key in viewBox) && finite(viewBox.x) && finite(viewBox.y) && finite(viewBox.width) && finite(viewBox.height) && manifest.canvas.viewBox.positive.every((key) => (viewBox[key] as number) > 0);
+}
+
 export function validateScene(v: unknown): SceneValidationResult {
-  if (!object(v) || !only(v, ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"]) || v.schemaVersion !== manifest.schemaVersion || !Number.isInteger(v.revision) || (v.revision as number) < 0 || !id(v.screenId) || !object(v.canvas) || !only(v.canvas, ["width", "height", "viewBox"]) || !finite(v.canvas.width) || !finite(v.canvas.height) || v.canvas.width <= 0 || v.canvas.height <= 0 || !object(v.canvas.viewBox) || !only(v.canvas.viewBox, ["x", "y", "width", "height"]) || !finite(v.canvas.viewBox.x) || !finite(v.canvas.viewBox.y) || !finite(v.canvas.viewBox.width) || !finite(v.canvas.viewBox.height) || v.canvas.viewBox.width <= 0 || v.canvas.viewBox.height <= 0 || !Array.isArray(v.layers) || !v.layers.every(id) || new Set(v.layers).size !== v.layers.length || !object(v.symbols) || !Array.isArray(v.elements) || v.elements.length > manifest.limits.elements) return { valid: false, error: "Invalid scene envelope." };
+  if (!object(v) || !only(v, manifest.scene.allowed) || !manifest.scene.required.every((key) => key in v) || v.schemaVersion !== manifest.schemaVersion || !Number.isInteger(v.revision) || (v.revision as number) < manifest.scene.minimum.revision || !id(v.screenId) || !validCanvas(v.canvas) || !Array.isArray(v.layers) || !v.layers.every(id) || new Set(v.layers).size !== v.layers.length || !object(v.symbols) || !Array.isArray(v.elements) || v.elements.length > manifest.limits.elements) return { valid: false, error: "Invalid scene envelope." };
   const ids = new Set<string>(), parents = new Map<string, string>(), links: string[][] = [], instances: string[][] = [];
   for (const e of v.elements) {
     if (!object(e) || !id(e.id) || ids.has(e.id) || !geometry(e.geometry, links)) return { valid: false, error: "Invalid element." }; ids.add(e.id);
@@ -83,7 +89,7 @@ export function validateScene(v: unknown): SceneValidationResult {
   }
   const symbols = new Map<string, string>();
   for (const [symbolId, symbol] of Object.entries(v.symbols)) {
-    if (!id(symbolId) || !object(symbol) || !only(symbol, ["rootElementId"]) || !id(symbol.rootElementId) || !ids.has(symbol.rootElementId)) return { valid: false, error: "Invalid symbol." };
+    if (!id(symbolId) || !object(symbol) || !only(symbol, manifest.symbol.allowed) || !manifest.symbol.required.every((key) => key in symbol) || !id(symbol.rootElementId) || !ids.has(symbol.rootElementId)) return { valid: false, error: "Invalid symbol." };
     symbols.set(symbolId, symbol.rootElementId);
   }
   for (const [instance, symbol] of instances) {

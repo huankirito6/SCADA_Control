@@ -10,6 +10,9 @@ public sealed record SceneManifest(
     string[] RoutingKinds,
     SceneLimits Limits,
     SceneValuePolicy Values,
+    SceneShape Scene,
+    SceneCanvasPolicy Canvas,
+    SceneShape Symbol,
     SceneGeometryPolicy Geometry,
     Dictionary<string, string[]> ElementOwnership,
     Dictionary<string, SceneShape> Bindings,
@@ -19,13 +22,15 @@ public sealed record SceneLimits(int Elements, int Nesting, int Vertices, int Se
 
 /// <summary>ASCII display tokens deliberately exclude markup delimiters, URL separators, quotes, escapes, and executable syntax.</summary>
 public sealed record SceneValuePolicy(string SafeStringPattern, string SafeStringRationale);
-public sealed record SceneGeometryPolicy(SceneShape Box, SceneShape Point, SceneArrayShape Points, ScenePathShape Path, SceneShape Link);
-public sealed record SceneArrayShape(string[] Required, string[] Allowed, SceneArrayBounds Array);
-public sealed record ScenePathShape(string[] Required, string[] Allowed, ScenePathArray Array);
+public sealed record SceneCanvasPolicy(string[] Required, string[] Allowed, string[] Positive, SceneShape ViewBox);
+public sealed record SceneGeometryPolicy(SceneGeometryShape Box, SceneShape Point, SceneArrayShape Points, ScenePathShape Path, SceneGeometryShape Link);
+public sealed record SceneGeometryShape(string Kind, string[] Required, string[] Allowed, string[]? Positive = null);
+public sealed record SceneArrayShape(string Kind, string[] Required, string[] Allowed, SceneArrayBounds Array);
+public sealed record ScenePathShape(string Kind, string[] Required, string[] Allowed, ScenePathArray Array);
 public sealed record SceneArrayBounds(int MinItems, int MaxItems);
 public sealed record ScenePathArray(int MaxItems, ScenePathSegmentShape Item);
 public sealed record ScenePathSegmentShape(string[] Required, string[] Allowed, string[] Kinds);
-public sealed record SceneShape(string[] Required, string[] Allowed);
+public sealed record SceneShape(string[] Required, string[] Allowed, string[]? Positive = null, Dictionary<string, int>? Minimum = null);
 
 public static class SceneContract
 {

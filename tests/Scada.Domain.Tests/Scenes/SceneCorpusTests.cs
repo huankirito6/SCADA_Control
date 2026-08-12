@@ -8,6 +8,8 @@ namespace Scada.Domain.Tests.Scenes;
 public sealed class SceneCorpusTests
 {
     private static readonly string CorpusDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../fixtures/scenes/schema-v1"));
+    private static readonly string[] GeometryKinds = ["box", "points", "path", "link"];
+
 
     [Fact]
     public void CSharpValidatorAcceptsAndRejectsTheSharedCorpus()
@@ -74,10 +76,50 @@ public sealed class SceneCorpusTests
         Assert.Equal(segment.GetProperty("kinds").EnumerateArray().Select(static x => x.GetString()), schemaSegments.GetProperty("items").GetProperty("properties").GetProperty("kind").GetProperty("enum").EnumerateArray().Select(static x => x.GetString()));
     }
 
+    [Fact]
+    public void ManifestMakesRootEnvelopeAndGeometryDiscriminatorsAuthoritative()
+    {
+        using var schema = System.Text.Json.JsonDocument.Parse(LoadContractResource("Scada.Contracts.Scenes.scene.schema.json"));
+        using var manifest = System.Text.Json.JsonDocument.Parse(LoadContractResource("Scada.Contracts.Scenes.widget-manifest.json"));
+
+        Assert.True(manifest.RootElement.TryGetProperty("scene", out var scene), "The manifest must own the root scene envelope policy.");
+        Assert.True(manifest.RootElement.TryGetProperty("canvas", out var canvas), "The manifest must own the canvas and viewBox policy.");
+        Assert.True(manifest.RootElement.TryGetProperty("symbol", out var symbol), "The manifest must own the symbol value shape.");
+        Assert.Equal(scene.GetProperty("required").EnumerateArray().Select(static x => x.GetString()), schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString()));
+        AssertShape(scene, schema.RootElement);
+        Assert.Equal(scene.GetProperty("minimum").GetProperty("revision").GetInt32(), schema.RootElement.GetProperty("properties").GetProperty("revision").GetProperty("minimum").GetInt32());
+        AssertShape(canvas, schema.RootElement.GetProperty("$defs").GetProperty("canvas"));
+        AssertShape(canvas.GetProperty("viewBox"), schema.RootElement.GetProperty("$defs").GetProperty("canvas").GetProperty("properties").GetProperty("viewBox"));
+        AssertShape(symbol, schema.RootElement.GetProperty("$defs").GetProperty("symbol"));
+
+        var definitions = schema.RootElement.GetProperty("$defs");
+        var geometry = manifest.RootElement.GetProperty("geometry");
+        foreach (var kind in GeometryKinds)
+        {
+            var policy = geometry.GetProperty(kind);
+            var schemaShape = definitions.GetProperty(kind);
+            Assert.Equal(kind, policy.GetProperty("kind").GetString());
+            Assert.Equal(kind, schemaShape.GetProperty("properties").GetProperty("kind").GetProperty("const").GetString());
+        }
+
+        AssertPositiveProperties(geometry.GetProperty("box"), definitions.GetProperty("box"));
+        AssertPositiveProperties(canvas, definitions.GetProperty("canvas"));
+        AssertPositiveProperties(canvas.GetProperty("viewBox"), definitions.GetProperty("canvas").GetProperty("properties").GetProperty("viewBox"));
+    }
+
     private static void AssertShape(System.Text.Json.JsonElement manifestShape, System.Text.Json.JsonElement schemaShape)
     {
         Assert.Equal(manifestShape.GetProperty("required").EnumerateArray().Select(static x => x.GetString()), schemaShape.GetProperty("required").EnumerateArray().Select(static x => x.GetString()));
         Assert.Equal(manifestShape.GetProperty("allowed").EnumerateArray().Select(static x => x.GetString()).OrderBy(static x => x).ToArray(), schemaShape.GetProperty("properties").EnumerateObject().Select(static x => x.Name).OrderBy(static x => x).ToArray());
+    }
+
+    private static void AssertPositiveProperties(System.Text.Json.JsonElement manifestShape, System.Text.Json.JsonElement schemaShape)
+    {
+        var schemaPositive = schemaShape.GetProperty("properties").EnumerateObject()
+            .Where(static property => property.Value.TryGetProperty("exclusiveMinimum", out var minimum) && minimum.GetDouble() == 0)
+            .Select(static property => property.Name)
+            .OrderBy(static property => property);
+        Assert.Equal(manifestShape.GetProperty("positive").EnumerateArray().Select(static property => property.GetString()).OrderBy(static property => property), schemaPositive);
     }
 
     [Fact]
