@@ -7,13 +7,18 @@ public sealed record SceneManifest(
     string[] WidgetTypes,
     string[] BindingTargets,
     string[] ActionKinds,
+    string[] RoutingKinds,
     SceneLimits Limits,
-    SceneValuePolicy Values);
+    SceneValuePolicy Values,
+    Dictionary<string, string[]> ElementOwnership,
+    Dictionary<string, SceneShape> Bindings,
+    Dictionary<string, SceneShape> Actions);
 
-public sealed record SceneLimits(int Elements, int Nesting, int Vertices, int Segments, int StringLength);
+public sealed record SceneLimits(int Elements, int Nesting, int Vertices, int Segments, int StringLength, int NumberLexemeLength, int NumberExponentMagnitude, int CanonicalNumberLength, bool RequiresExactJavaScriptInteger);
 
-/// <summary>Manifest policy consumed by every generated validator. Values are JSON scalars only; strings use this allowlist so scene data cannot carry executable syntax, markup, or URLs.</summary>
-public sealed record SceneValuePolicy(string SafeStringPattern);
+/// <summary>ASCII display tokens deliberately exclude markup delimiters, URL separators, quotes, escapes, and executable syntax.</summary>
+public sealed record SceneValuePolicy(string SafeStringPattern, string SafeStringRationale);
+public sealed record SceneShape(string[] Required, string[] Allowed);
 
 public static class SceneContract
 {

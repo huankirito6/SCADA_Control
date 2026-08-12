@@ -13,13 +13,11 @@ public sealed record SceneCanonicalizationResult(bool IsValid, byte[]? Canonical
 
 public sealed class SceneCanonicalizer : ISceneCanonicalizer
 {
-    private const int MaximumNumberLexemeLength = 64;
-    private const int MaximumNumberExponentMagnitude = 64;
-    private const int MaximumCanonicalNumberLength = 64;
     private static readonly SceneManifest Contract = SceneContract.Manifest;
     private static readonly HashSet<string> WidgetTypes = Contract.WidgetTypes.ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<string> Targets = Contract.BindingTargets.ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<string> Actions = Contract.ActionKinds.ToHashSet(StringComparer.Ordinal);
+    private static readonly HashSet<string> RoutingKinds = Contract.RoutingKinds.ToHashSet(StringComparer.Ordinal);
     private static readonly Regex SafeString = new(Contract.Values.SafeStringPattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     public SceneCanonicalizationResult ValidateAndCanonicalize(string sceneJson)
@@ -31,7 +29,7 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
             var bytes = Canonicalize(document.RootElement);
             return new(true, bytes, Convert.ToHexStringLower(SHA256.HashData(bytes)), null);
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException or OverflowException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException or OverflowException or FormatException)
         { return new(false, null, null, exception.Message); }
     }
 
@@ -66,7 +64,7 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
     private static void ValidateElement(JsonElement e, HashSet<string> ids, Dictionary<string, string> parents, List<(string From, string To)> links, List<(string Id, string Symbol)> instances, HashSet<string> layers)
     {
         RequireObject(e, "element"); var id = Require(e, "id").GetString(); ValidateId(id, "element ID"); if (!ids.Add(id!)) throw new ArgumentException("Duplicate element ID."); var kind = Require(e, "kind").GetString();
-        var allowed = kind switch { "group" => new[] { "id", "kind", "parentId", "layer", "geometry" }, "widget" => new[] { "id", "kind", "parentId", "layer", "widgetType", "geometry", "bindings", "actions", "props" }, "instance" => new[] { "id", "kind", "parentId", "layer", "symbolId", "tagScope", "geometry" }, _ => throw new ArgumentException("Unknown element kind.") };
+        var allowed = Contract.ElementOwnership.TryGetValue(kind!, out var ownership) ? ownership : throw new ArgumentException("Unknown element kind.");
         RequireOnly(e, allowed); if (e.TryGetProperty("parentId", out var parent)) { ValidateId(parent.GetString(), "parent ID"); parents.Add(id!, parent.GetString()!); } if (e.TryGetProperty("layer", out var layer) && !layers.Contains(layer.GetString()!)) throw new ArgumentException("Unknown layer.");
         if (kind == "widget") { var widget = Require(e, "widgetType").GetString(); if (!WidgetTypes.Contains(widget!)) throw new ArgumentException("Unknown widget."); ValidateBindings(e); ValidateActions(e); ValidateSafeMapProperty(e, "props"); }
         if (kind == "instance") { var symbol = Require(e, "symbolId").GetString(); ValidateId(symbol, "symbol ID"); ValidateSafeMapProperty(e, "tagScope", required: true); instances.Add((id!, symbol!)); }
@@ -79,11 +77,11 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
         if (kind == "box") { RequireOnly(g, "kind", "x", "y", "w", "h", "rotation"); foreach (var key in new[] { "x", "y", "w", "h", "rotation" }) FiniteNumber(Require(g, key), key); PositiveNumber(Require(g, "w"), "width"); PositiveNumber(Require(g, "h"), "height"); return; }
         if (kind == "points") { RequireOnly(g, "kind", "vertices"); var points = Require(g, "vertices"); RequireArray(points, "points"); if (points.GetArrayLength() < 2 || points.GetArrayLength() > Contract.Limits.Vertices) throw new ArgumentException("Vertex limit exceeded."); foreach (var p in points.EnumerateArray()) { RequireObject(p, "point"); RequireOnly(p, "x", "y"); FiniteNumber(Require(p, "x"), "x"); FiniteNumber(Require(p, "y"), "y"); } return; }
         if (kind == "path") { RequireOnly(g, "kind", "segments"); var segments = Require(g, "segments"); RequireArray(segments, "segments"); if (segments.GetArrayLength() > Contract.Limits.Segments) throw new ArgumentException("Path limit exceeded."); foreach (var s in segments.EnumerateArray()) { RequireObject(s, "segment"); RequireOnly(s, "kind", "x", "y"); if (Require(s, "kind").GetString() is not ("move" or "line")) throw new ArgumentException("Unknown path segment."); FiniteNumber(Require(s, "x"), "segment x"); FiniteNumber(Require(s, "y"), "segment y"); } return; }
-        if (kind == "link") { RequireOnly(g, "kind", "fromRef", "toRef", "routing"); if (Require(g, "routing").GetString() is not ("orthogonal" or "straight")) throw new ArgumentException("Unknown link routing."); var from = Require(g, "fromRef").GetString(); var to = Require(g, "toRef").GetString(); ValidateId(from, "link source"); ValidateId(to, "link target"); links.Add((from!, to!)); return; } throw new ArgumentException("Unknown geometry.");
+        if (kind == "link") { RequireOnly(g, "kind", "fromRef", "toRef", "routing"); if (!RoutingKinds.Contains(Require(g, "routing").GetString()!)) throw new ArgumentException("Unknown link routing."); var from = Require(g, "fromRef").GetString(); var to = Require(g, "toRef").GetString(); ValidateId(from, "link source"); ValidateId(to, "link target"); links.Add((from!, to!)); return; } throw new ArgumentException("Unknown geometry.");
     }
 
-    private static void ValidateBindings(JsonElement e) { if (!e.TryGetProperty("bindings", out var bindings)) return; RequireArray(bindings, "bindings"); foreach (var b in bindings.EnumerateArray()) { RequireObject(b, "binding"); var tier = Require(b, "tier").GetString(); if (tier == "direct") RequireOnly(b, "tier", "tag", "target"); else if (tier == "map") { RequireOnly(b, "tier", "tag", "target", "map"); ValidateSafeMapValue(Require(b, "map"), "binding map"); } else throw new ArgumentException("Unknown binding tier."); ValidateId(Require(b, "tag").GetString(), "tag"); if (!Targets.Contains(Require(b, "target").GetString()!)) throw new ArgumentException("Binding target is not allowed."); } }
-    private static void ValidateActions(JsonElement e) { if (!e.TryGetProperty("actions", out var actions)) return; RequireArray(actions, "actions"); foreach (var a in actions.EnumerateArray()) { RequireObject(a, "action"); RequireOnly(a, "kind", "commandId", "parameters"); if (!Actions.Contains(Require(a, "kind").GetString()!)) throw new ArgumentException("Unknown action."); ValidateId(Require(a, "commandId").GetString(), "command ID"); ValidateSafeMapValue(Require(a, "parameters"), "parameters"); } }
+    private static void ValidateBindings(JsonElement e) { if (!e.TryGetProperty("bindings", out var bindings)) return; RequireArray(bindings, "bindings"); foreach (var b in bindings.EnumerateArray()) { RequireObject(b, "binding"); var tier = Require(b, "tier").GetString(); if (!Contract.Bindings.TryGetValue(tier!, out var shape)) throw new ArgumentException("Unknown binding tier."); RequireOnly(b, shape.Allowed); foreach (var required in shape.Required) _ = Require(b, required); if (tier == "map") ValidateSafeMapValue(Require(b, "map"), "binding map"); ValidateId(Require(b, "tag").GetString(), "tag"); if (!Targets.Contains(Require(b, "target").GetString()!)) throw new ArgumentException("Binding target is not allowed."); } }
+    private static void ValidateActions(JsonElement e) { if (!e.TryGetProperty("actions", out var actions)) return; RequireArray(actions, "actions"); foreach (var a in actions.EnumerateArray()) { RequireObject(a, "action"); var kind = Require(a, "kind").GetString(); if (!Actions.Contains(kind!) || !Contract.Actions.TryGetValue(kind!, out var shape)) throw new ArgumentException("Unknown action."); RequireOnly(a, shape.Allowed); foreach (var required in shape.Required) _ = Require(a, required); ValidateId(Require(a, "commandId").GetString(), "command ID"); ValidateSafeMapValue(Require(a, "parameters"), "parameters"); } }
     private static void ValidateSafeMapProperty(JsonElement e, string name, bool required = false) { if (!e.TryGetProperty(name, out var map)) { if (required) throw new ArgumentException($"Missing {name}."); return; } ValidateSafeMapValue(map, name); }
     private static void ValidateSafeMapValue(JsonElement map, string name) { RequireObject(map, name); foreach (var property in map.EnumerateObject()) { ValidateId(property.Name, $"{name} key"); if (property.Value.ValueKind == JsonValueKind.String && IsSafeString(property.Value.GetString())) continue; if (property.Value.ValueKind == JsonValueKind.Number) { FiniteNumber(property.Value, name); continue; } if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False) continue; throw new ArgumentException($"Unsafe {name}."); } }
     private static bool IsSafeString(string? value) => !string.IsNullOrEmpty(value) && value.Length <= Contract.Limits.StringLength && SafeString.IsMatch(value);
@@ -110,7 +108,7 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
         var outputLength = scale >= 0
             ? checked(digits.Length + scale)
             : Math.Max(checked(digits.Length - scale + 1), checked(-scale + 2));
-        if (outputLength + (negative ? 1 : 0) > MaximumCanonicalNumberLength) throw new ArgumentException("Canonical number exceeds the allowed length.");
+        if (outputLength + (negative ? 1 : 0) > Contract.Limits.CanonicalNumberLength) throw new ArgumentException("Canonical number exceeds the allowed length.");
         var output = scale >= 0 ? digits + new string('0', scale) : WriteDecimal(digits, -scale);
         return negative ? "-" + output : output;
     }
@@ -120,14 +118,20 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
     private static void RequireOnly(JsonElement e, params string[] names) { foreach (var p in e.EnumerateObject()) if (!names.Contains(p.Name, StringComparer.Ordinal)) throw new ArgumentException($"Unknown property {p.Name}."); }
     private static void RequireObject(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Object) throw new ArgumentException($"{name} must be an object."); }
     private static void RequireArray(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Array) throw new ArgumentException($"{name} must be an array."); }
-    private static void FiniteNumber(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Number) throw new ArgumentException($"{name} must be finite."); ValidateNumberLexeme(e.GetRawText()); if (!double.IsFinite(e.GetDouble())) throw new ArgumentException($"{name} must be finite."); }
-    private static void PositiveNumber(JsonElement e, string name) { FiniteNumber(e, name); if (e.GetDouble() <= 0) throw new ArgumentException($"{name} must be positive."); }
+    private static void FiniteNumber(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Number) throw new ArgumentException($"{name} must be finite."); ValidateNumberLexeme(e.GetRawText()); }
+    private static void PositiveNumber(JsonElement e, string name) { FiniteNumber(e, name); if (!IsPositiveDecimal(e.GetRawText())) throw new ArgumentException($"{name} must be positive."); }
+    private static bool IsPositiveDecimal(string raw)
+    {
+        var index = raw[0] == '-' ? 1 : 0;
+        for (; index < raw.Length && raw[index] is not ('e' or 'E'); index++) if (raw[index] is >= '1' and <= '9') return raw[0] != '-';
+        return false;
+    }
     private static void ValidateNumberLexeme(string raw)
     {
-        if (raw.Length > MaximumNumberLexemeLength) throw new ArgumentException("Number lexeme exceeds the allowed length.");
+        if (raw.Length > Contract.Limits.NumberLexemeLength) throw new ArgumentException("Number lexeme exceeds the allowed length.");
         var exponentAt = raw.IndexOfAny(['e', 'E']);
-        if (exponentAt < 0) return;
-        if (!int.TryParse(raw[(exponentAt + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var exponent) || Math.Abs((long)exponent) > MaximumNumberExponentMagnitude) throw new ArgumentException("Number exponent exceeds the allowed magnitude.");
+        if (exponentAt >= 0 && (!int.TryParse(raw[(exponentAt + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var exponent) || Math.Abs((long)exponent) > Contract.Limits.NumberExponentMagnitude)) throw new ArgumentException("Number exponent exceeds the allowed magnitude.");
+        if (Contract.Limits.RequiresExactJavaScriptInteger && exponentAt < 0 && !raw.Contains('.') && BigInteger.Abs(BigInteger.Parse(raw, CultureInfo.InvariantCulture)) > 9007199254740991) throw new ArgumentException("Integer cannot be represented exactly by JavaScript.");
     }
     private static void ValidateId(string? value, string name) { if (!IsId(value)) throw new ArgumentException($"Invalid {name}."); }
     private static bool IsId(string? value) => !string.IsNullOrEmpty(value) && value.Length <= Contract.Limits.StringLength && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');

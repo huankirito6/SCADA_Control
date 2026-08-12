@@ -3,9 +3,33 @@
   "widgetTypes": ["connector", "image", "motor", "pipe", "text"],
   "bindingTargets": ["attr:fill", "attr:opacity", "attr:stroke", "text:value", "visibility"],
   "actionKinds": ["command"],
-  "limits": { "elements": 300, "nesting": 8, "vertices": 4, "segments": 4, "stringLength": 48 },
-  "security": { "allowsHtml": false, "allowsSvg": false, "allowsUrls": false, "allowsCode": false },
-  "values": { "safeStringPattern": "^[A-Za-z0-9 _.#%+,-]+$" },
+  "routingKinds": ["orthogonal", "straight"],
+  "limits": {
+    "elements": 300,
+    "nesting": 8,
+    "vertices": 4,
+    "segments": 4,
+    "stringLength": 48,
+    "numberLexemeLength": 64,
+    "numberExponentMagnitude": 64,
+    "canonicalNumberLength": 64,
+    "requiresExactJavaScriptInteger": true
+  },
+  "security": {
+    "allowsHtml": false,
+    "allowsSvg": false,
+    "allowsUrls": false,
+    "allowsCode": false
+  },
+  "values": {
+    "safeStringPattern": "^[A-Za-z0-9 _.#%+,-]+$",
+    "safeStringRationale": "ASCII display tokens only: excludes markup delimiters, URL separators, quotes, escapes, and executable syntax."
+  },
+  "elementOwnership": {
+    "group": ["id", "kind", "parentId", "layer", "geometry"],
+    "widget": ["id", "kind", "parentId", "layer", "widgetType", "geometry", "bindings", "actions", "props"],
+    "instance": ["id", "kind", "parentId", "layer", "symbolId", "tagScope", "geometry"]
+  },
   "bindings": {
     "direct": { "required": ["tier", "tag", "target"], "allowed": ["tier", "tag", "target"] },
     "map": { "required": ["tier", "tag", "target", "map"], "allowed": ["tier", "tag", "target", "map"] }

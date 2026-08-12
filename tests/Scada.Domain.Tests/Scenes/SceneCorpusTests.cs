@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using Scada.Application.Scenes;
+using Scada.Contracts.Scenes;
 
 namespace Scada.Domain.Tests.Scenes;
 
@@ -17,16 +18,34 @@ public sealed class SceneCorpusTests
         {
             using var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(fixturePath));
             var expected = fixture.RootElement.GetProperty("expectedValid").GetBoolean();
-            var result = canonicalizer.ValidateAndCanonicalize(fixture.RootElement.GetProperty("scene").GetRawText());
+            var sceneJson = fixture.RootElement.GetProperty("sceneJson").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(sceneJson), $"{Path.GetFileName(fixturePath)} must declare explicit raw sceneJson.");
+            var result = canonicalizer.ValidateAndCanonicalize(sceneJson!);
 
             Assert.Equal(expected, result.IsValid);
         }
     }
 
     [Fact]
-    public void ServerCanonicalBytesAndHashAreCultureStableAndPreserveNumericMeaning()
+    public void SchemaManifestAndValidatorPolicyStayConsistent()
     {
-        var scene = LoadScene("valid-complex.json");
+        using var schema = System.Text.Json.JsonDocument.Parse(LoadContractResource("Scada.Contracts.Scenes.scene.schema.json"));
+        var manifest = SceneContract.Manifest;
+        var schemaText = schema.RootElement.GetRawText();
+
+        Assert.Equal(manifest.Limits.Elements, schema.RootElement.GetProperty("properties").GetProperty("elements").GetProperty("maxItems").GetInt32());
+        var definitions = schema.RootElement.GetProperty("$defs");
+        Assert.Equal(manifest.Limits.Vertices, definitions.GetProperty("points").GetProperty("properties").GetProperty("vertices").GetProperty("maxItems").GetInt32());
+        Assert.Equal(manifest.Limits.Segments, definitions.GetProperty("path").GetProperty("properties").GetProperty("segments").GetProperty("maxItems").GetInt32());
+        Assert.Contains($"{{1,{manifest.Limits.StringLength}}}", definitions.GetProperty("id").GetProperty("pattern").GetString(), StringComparison.Ordinal);
+        foreach (var value in manifest.WidgetTypes.Concat(manifest.BindingTargets).Concat(manifest.ActionKinds).Concat(manifest.RoutingKinds)) Assert.Contains($"\"{value}\"", schemaText, StringComparison.Ordinal);
+        foreach (var shape in manifest.ElementOwnership.Values) foreach (var property in shape) Assert.NotEmpty(property);
+        foreach (var shape in manifest.Bindings.Values.Concat(manifest.Actions.Values)) { foreach (var property in shape.Required.Concat(shape.Allowed)) Assert.NotEmpty(property); }
+    }
+
+    [Fact]
+    public void ServerCanonicalBytesAndHashAreCultureStableAndPreserveNumericMeaning()
+    {        var scene = LoadScene("valid-complex.json");
         var canonicalizer = new SceneCanonicalizer();
         var originalCulture = CultureInfo.CurrentCulture;
         var originalUiCulture = CultureInfo.CurrentUICulture;
@@ -68,7 +87,7 @@ public sealed class SceneCorpusTests
     }
 
     [Fact]
-    public void ServerCanonicalizesEquivalentDecimalLexemesWithoutCollapsingDistinctLargeIntegers()
+    public void ServerCanonicalizesEquivalentDecimalLexemesAndRejectsIntegersOutsideTheClientExactRange()
     {
         var canonicalizer = new SceneCanonicalizer();
         var source = LoadScene("valid-complex.json");
@@ -81,17 +100,25 @@ public sealed class SceneCorpusTests
         Assert.True(one.IsValid, one.Error);
         Assert.True(onePointZero.IsValid, onePointZero.Error);
         Assert.True(oneExponentZero.IsValid, oneExponentZero.Error);
-        Assert.True(lowerInteger.IsValid, lowerInteger.Error);
-        Assert.True(higherInteger.IsValid, higherInteger.Error);
+        Assert.False(lowerInteger.IsValid);
+        Assert.False(higherInteger.IsValid);
         Assert.Equal(one.CanonicalBytes, onePointZero.CanonicalBytes);
         Assert.Equal(one.CanonicalBytes, oneExponentZero.CanonicalBytes);
-        Assert.NotEqual(lowerInteger.CanonicalBytes, higherInteger.CanonicalBytes);
-        Assert.NotEqual(lowerInteger.Sha256, higherInteger.Sha256);
+        Assert.Null(lowerInteger.CanonicalBytes);
+        Assert.Null(higherInteger.CanonicalBytes);
     }
 
     private static string LoadScene(string fixtureName)
     {
         using var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(CorpusDirectory, fixtureName)));
-        return fixture.RootElement.GetProperty("scene").GetRawText();
+        return fixture.RootElement.GetProperty("sceneJson").GetString()!;
+    }
+
+    private static string LoadContractResource(string name)
+    {
+        using var stream = typeof(SceneContract).Assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidOperationException($"Embedded contract resource {name} is missing.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 }

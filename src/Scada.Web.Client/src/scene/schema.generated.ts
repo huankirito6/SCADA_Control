@@ -2,8 +2,8 @@ import manifest from "../../../Scada.Contracts/Scenes/widget-manifest.json" with
 
 export type SceneValidationResult = { readonly valid: boolean; readonly error?: string };
 type JsonObject = Record<string, unknown>;
-const widgets = new Set(manifest.widgetTypes), targets = new Set(manifest.bindingTargets), actions = new Set(manifest.actionKinds);
-const maximumNumberLexemeLength = 64, maximumNumberExponentMagnitude = 64, maximumCanonicalNumberLength = 64;
+const widgets = new Set(manifest.widgetTypes), targets = new Set(manifest.bindingTargets), actions = new Set(manifest.actionKinds), routingKinds = new Set(manifest.routingKinds);
+const { numberLexemeLength: maximumNumberLexemeLength, numberExponentMagnitude: maximumNumberExponentMagnitude, canonicalNumberLength: maximumCanonicalNumberLength } = manifest.limits;
 const id = (v: unknown): v is string => typeof v === "string" && new RegExp(`^[A-Za-z0-9_-]{1,${manifest.limits.stringLength}}$`).test(v);
 const object = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -26,6 +26,15 @@ function numericLexemeWithinLimits(raw: string): boolean {
   return outputLength + (raw.startsWith("-") ? 1 : 0) <= maximumCanonicalNumberLength;
 }
 
+function numericLexemeIsExactlyRepresentable(raw: string): boolean {
+  if (!numericLexemeWithinLimits(raw)) return false;
+  if (!/[.eE]/.test(raw)) {
+    try { const value = Number(raw); return Number.isFinite(value) && BigInt(raw) === BigInt(value); } catch { return false; }
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value.toString() !== "Infinity";
+}
+
 export function validateSceneJson(sceneJson: string): SceneValidationResult {
   let inString = false, escaped = false;
   const number = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
@@ -33,7 +42,7 @@ export function validateSceneJson(sceneJson: string): SceneValidationResult {
     const character = sceneJson[index];
     if (inString) { if (escaped) escaped = false; else if (character === "\\") escaped = true; else if (character === "\"") inString = false; continue; }
     if (character === "\"") { inString = true; continue; }
-    if (character === "-" || (character >= "0" && character <= "9")) { number.lastIndex = index; const match = number.exec(sceneJson); if (!match || !numericLexemeWithinLimits(match[0])) return { valid: false, error: "Number lexeme exceeds the allowed limits." }; index = number.lastIndex - 1; }
+    if (character === "-" || (character >= "0" && character <= "9")) { number.lastIndex = index; const match = number.exec(sceneJson); if (!match || !numericLexemeIsExactlyRepresentable(match[0])) return { valid: false, error: "Number lexeme exceeds the allowed limits or cannot be represented exactly." }; index = number.lastIndex - 1; }
   }
   try { return validateScene(JSON.parse(sceneJson)); } catch { return { valid: false, error: "Invalid JSON." }; }
 }
@@ -43,7 +52,7 @@ function geometry(v: unknown, links: string[][]): boolean {
   if (v.kind === "box") return only(v, ["kind", "x", "y", "w", "h", "rotation"]) && [v.x, v.y, v.w, v.h, v.rotation].every(finite) && (v.w as number) > 0 && (v.h as number) > 0;
   if (v.kind === "points") return only(v, ["kind", "vertices"]) && Array.isArray(v.vertices) && v.vertices.length >= 2 && v.vertices.length <= manifest.limits.vertices && v.vertices.every((p) => object(p) && only(p, ["x", "y"]) && finite(p.x) && finite(p.y));
   if (v.kind === "path") return only(v, ["kind", "segments"]) && Array.isArray(v.segments) && v.segments.length <= manifest.limits.segments && v.segments.every((s) => object(s) && only(s, ["kind", "x", "y"]) && (s.kind === "move" || s.kind === "line") && finite(s.x) && finite(s.y));
-  if (v.kind === "link" && only(v, ["kind", "fromRef", "toRef", "routing"]) && id(v.fromRef) && id(v.toRef) && (v.routing === "orthogonal" || v.routing === "straight")) { links.push([v.fromRef, v.toRef]); return true; }
+  if (v.kind === "link" && only(v, ["kind", "fromRef", "toRef", "routing"]) && id(v.fromRef) && id(v.toRef) && typeof v.routing === "string" && routingKinds.has(v.routing)) { links.push([v.fromRef, v.toRef]); return true; }
   return false;
 }
 
@@ -57,8 +66,8 @@ export function validateScene(v: unknown): SceneValidationResult {
   const ids = new Set<string>(), parents = new Map<string, string>(), links: string[][] = [], instances: string[][] = [];
   for (const e of v.elements) {
     if (!object(e) || !id(e.id) || ids.has(e.id) || !geometry(e.geometry, links)) return { valid: false, error: "Invalid element." }; ids.add(e.id);
-    const allowed = e.kind === "group" ? ["id", "kind", "parentId", "layer", "geometry"] : e.kind === "widget" ? ["id", "kind", "parentId", "layer", "widgetType", "geometry", "bindings", "actions", "props"] : e.kind === "instance" ? ["id", "kind", "parentId", "layer", "symbolId", "tagScope", "geometry"] : [];
-    if (!only(e, allowed)) return { valid: false, error: "Invalid element ownership." }; if (e.parentId !== undefined) { if (!id(e.parentId)) return { valid: false, error: "Invalid parent." }; parents.set(e.id, e.parentId); } if (e.layer !== undefined && (!id(e.layer) || !v.layers.includes(e.layer))) return { valid: false, error: "Invalid layer." };
+    const allowed = e.kind === "group" || e.kind === "widget" || e.kind === "instance" ? manifest.elementOwnership[e.kind] : undefined;
+    if (!allowed || !only(e, allowed)) return { valid: false, error: "Invalid element ownership." }; if (e.parentId !== undefined) { if (!id(e.parentId)) return { valid: false, error: "Invalid parent." }; parents.set(e.id, e.parentId); } if (e.layer !== undefined && (!id(e.layer) || !v.layers.includes(e.layer))) return { valid: false, error: "Invalid layer." };
     if (e.kind === "widget" && (!id(e.widgetType) || !widgets.has(e.widgetType) || (e.bindings !== undefined && !validBindings(e.bindings)) || (e.actions !== undefined && !validActions(e.actions)) || (e.props !== undefined && !safeMap(e.props)))) return { valid: false, error: "Invalid widget." };
     if (e.kind === "instance" && (!id(e.symbolId) || !safeMap(e.tagScope))) return { valid: false, error: "Invalid instance." }; if (e.kind === "instance") instances.push([e.id, e.symbolId as string]);
   }

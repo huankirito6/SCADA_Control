@@ -1,31 +1,4 @@
 {
   "expectedValid": false,
-  "scene": {
-    "schemaVersion": 1,
-    "revision": 7,
-    "screenId": "line-1-overview",
-    "canvas": { "width": 1920, "height": 1080, "viewBox": { "x": 0, "y": 0, "width": 1920, "height": 1080 } },
-    "layers": ["background"],
-    "symbols": {},
-    "elements": [
-      {
-        "id": "motor",
-        "kind": "widget",
-        "layer": "background",
-        "widgetType": "motor",
-        "geometry": { "kind": "box", "x": 1, "y": 1, "w": 10, "h": 10, "rotation": 0 },
-        "props": { "label": "alert(1)" },
-        "actions": [{ "kind": "command", "commandId": "start-motor", "parameters": { "target": "alert(1)" } }],
-        "bindings": [{ "tier": "map", "tag": "motor-state", "target": "attr:fill", "map": { "running": "alert(1)" } }]
-      },
-      {
-        "id": "motor-instance",
-        "kind": "instance",
-        "layer": "background",
-        "symbolId": "motor-symbol",
-        "tagScope": { "line": "alert(1)" },
-        "geometry": { "kind": "box", "x": 20, "y": 1, "w": 10, "h": 10, "rotation": 0 }
-      }
-    ]
-  }
+  "sceneJson": "{\n    \"schemaVersion\": 1,\n    \"revision\": 7,\n    \"screenId\": \"line-1-overview\",\n    \"canvas\": { \"width\": 1920, \"height\": 1080, \"viewBox\": { \"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080 } },\n    \"layers\": [\"background\"],\n    \"symbols\": {},\n    \"elements\": [\n      {\n        \"id\": \"motor\",\n        \"kind\": \"widget\",\n        \"layer\": \"background\",\n        \"widgetType\": \"motor\",\n        \"geometry\": { \"kind\": \"box\", \"x\": 1, \"y\": 1, \"w\": 10, \"h\": 10, \"rotation\": 0 },\n        \"props\": { \"label\": \"alert(1)\" },\n        \"actions\": [{ \"kind\": \"command\", \"commandId\": \"start-motor\", \"parameters\": { \"target\": \"alert(1)\" } }],\n        \"bindings\": [{ \"tier\": \"map\", \"tag\": \"motor-state\", \"target\": \"attr:fill\", \"map\": { \"running\": \"alert(1)\" } }]\n      },\n      {\n        \"id\": \"motor-instance\",\n        \"kind\": \"instance\",\n        \"layer\": \"background\",\n        \"symbolId\": \"motor-symbol\",\n        \"tagScope\": { \"line\": \"alert(1)\" },\n        \"geometry\": { \"kind\": \"box\", \"x\": 20, \"y\": 1, \"w\": 10, \"h\": 10, \"rotation\": 0 }\n      }\n    ]\n  }"
 }
