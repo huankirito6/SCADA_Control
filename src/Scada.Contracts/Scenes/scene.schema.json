@@ -1,33 +1,38 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "scada.scene.schema.v1",
-  "type": "object", "additionalProperties": false,
+  "type": "object",
+  "additionalProperties": false,
   "required": ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"],
   "properties": {
-    "schemaVersion": { "const": 1 }, "revision": { "type": "integer", "minimum": 0 }, "screenId": { "$ref": "#/$defs/id" },
-    "canvas": { "$ref": "#/$defs/canvas" }, "layers": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-    "symbols": { "type": "array", "items": { "$ref": "#/$defs/symbol" } },
-    "elements": { "type": "array", "maxItems": { "$ref": "widget-manifest.json#/limits/elements" }, "items": { "$ref": "#/$defs/element" } }
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "screenId": { "$ref": "#/$defs/id" },
+    "canvas": { "$ref": "#/$defs/canvas" },
+    "layers": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+    "symbols": { "type": "object", "propertyNames": { "$ref": "#/$defs/id" }, "additionalProperties": { "$ref": "#/$defs/symbol" } },
+    "elements": { "type": "array", "maxItems": 300, "items": { "$ref": "#/$defs/element" } }
   },
   "$defs": {
     "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,48}$" },
-    "safeString": { "type": "string", "maxLength": { "$ref": "widget-manifest.json#/limits/stringLength" }, "pattern": "^(?!.*(?:<|>|javascript:|data:|https?://|on[a-z]+\\s*=|function\\s*\\(|=>)).*$" },
-    "number": { "type": "number" }, "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } },
+    "safeString": { "type": "string", "minLength": 1, "maxLength": 48, "pattern": "^[A-Za-z0-9 _.#%+,-]+$" },
+    "safeScalar": { "oneOf": [{ "$ref": "#/$defs/safeString" }, { "type": "number" }, { "type": "boolean" }] },
+    "safeMap": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,48}$" }, "additionalProperties": { "$ref": "#/$defs/safeScalar" } },
+    "number": { "type": "number" },
+    "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } },
     "canvas": { "type": "object", "additionalProperties": false, "required": ["width", "height", "viewBox"], "properties": { "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "viewBox": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } } } },
     "box": { "type": "object", "additionalProperties": false, "required": ["kind", "x", "y", "w", "h", "rotation"], "properties": { "kind": { "const": "box" }, "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" }, "w": { "type": "number", "exclusiveMinimum": 0 }, "h": { "type": "number", "exclusiveMinimum": 0 }, "rotation": { "$ref": "#/$defs/number" } } },
-    "points": { "type": "object", "additionalProperties": false, "required": ["kind", "vertices"], "properties": { "kind": { "const": "points" }, "vertices": { "type": "array", "minItems": 2, "maxItems": { "$ref": "widget-manifest.json#/limits/vertices" }, "items": { "$ref": "#/$defs/point" } } } },
-    "path": { "type": "object", "additionalProperties": false, "required": ["kind", "segments"], "properties": { "kind": { "const": "path" }, "segments": { "type": "array", "maxItems": { "$ref": "widget-manifest.json#/limits/segments" }, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "x", "y"], "properties": { "kind": { "enum": ["move", "line"] }, "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } } } } },
+    "points": { "type": "object", "additionalProperties": false, "required": ["kind", "vertices"], "properties": { "kind": { "const": "points" }, "vertices": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "$ref": "#/$defs/point" } } } },
+    "path": { "type": "object", "additionalProperties": false, "required": ["kind", "segments"], "properties": { "kind": { "const": "path" }, "segments": { "type": "array", "maxItems": 4, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "x", "y"], "properties": { "kind": { "enum": ["move", "line"] }, "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } } } } },
     "link": { "type": "object", "additionalProperties": false, "required": ["kind", "fromRef", "toRef", "routing"], "properties": { "kind": { "const": "link" }, "fromRef": { "$ref": "#/$defs/id" }, "toRef": { "$ref": "#/$defs/id" }, "routing": { "enum": ["orthogonal", "straight"] } } },
     "geometry": { "oneOf": [{ "$ref": "#/$defs/box" }, { "$ref": "#/$defs/points" }, { "$ref": "#/$defs/path" }, { "$ref": "#/$defs/link" }] },
-    "symbol": { "type": "object", "additionalProperties": false, "required": ["id", "rootElementId"], "properties": { "id": { "$ref": "#/$defs/id" }, "rootElementId": { "$ref": "#/$defs/id" } } },
-    "binding": { "oneOf": [{ "type": "object", "additionalProperties": false, "required": ["tier", "tag", "target"], "properties": { "tier": { "const": "direct" }, "tag": { "$ref": "#/$defs/id" }, "target": { "enum": { "$ref": "widget-manifest.json#/bindingTargets" } } } }, { "type": "object", "additionalProperties": false, "required": ["tier", "tag", "target", "map"], "properties": { "tier": { "const": "map" }, "tag": { "$ref": "#/$defs/id" }, "target": { "enum": { "$ref": "widget-manifest.json#/bindingTargets" } }, "map": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } } } }] },
-    "action": { "type": "object", "additionalProperties": false, "required": ["kind", "commandId", "parameters"], "properties": { "kind": { "enum": { "$ref": "widget-manifest.json#/actionKinds" } }, "commandId": { "$ref": "#/$defs/id" }, "parameters": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } } } },
+    "symbol": { "type": "object", "additionalProperties": false, "required": ["rootElementId"], "properties": { "rootElementId": { "$ref": "#/$defs/id" } } },
+    "binding": { "oneOf": [{ "type": "object", "additionalProperties": false, "required": ["tier", "tag", "target"], "properties": { "tier": { "const": "direct" }, "tag": { "$ref": "#/$defs/id" }, "target": { "enum": ["attr:fill", "attr:opacity", "attr:stroke", "text:value", "visibility"] } } }, { "type": "object", "additionalProperties": false, "required": ["tier", "tag", "target", "map"], "properties": { "tier": { "const": "map" }, "tag": { "$ref": "#/$defs/id" }, "target": { "enum": ["attr:fill", "attr:opacity", "attr:stroke", "text:value", "visibility"] }, "map": { "$ref": "#/$defs/safeMap" } } }] },
+    "action": { "type": "object", "additionalProperties": false, "required": ["kind", "commandId", "parameters"], "properties": { "kind": { "enum": ["command"] }, "commandId": { "$ref": "#/$defs/id" }, "parameters": { "$ref": "#/$defs/safeMap" } } },
     "baseElement": { "type": "object", "required": ["id", "kind", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "geometry": { "$ref": "#/$defs/geometry" } } },
-    "element": { "oneOf": [
-      { "$ref": "#/$defs/group" }, { "$ref": "#/$defs/widget" }, { "$ref": "#/$defs/instance" }
-    ] },
+    "element": { "oneOf": [{ "$ref": "#/$defs/group" }, { "$ref": "#/$defs/widget" }, { "$ref": "#/$defs/instance" }] },
     "group": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "group" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "geometry": { "$ref": "#/$defs/geometry" } } }] },
-    "widget": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "widgetType", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "widget" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "widgetType": { "enum": { "$ref": "widget-manifest.json#/widgetTypes" } }, "geometry": { "$ref": "#/$defs/geometry" }, "bindings": { "type": "array", "items": { "$ref": "#/$defs/binding" } }, "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } }, "props": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } } } }] },
-    "instance": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "symbolId", "tagScope", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "instance" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "symbolId": { "$ref": "#/$defs/id" }, "tagScope": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } }, "geometry": { "$ref": "#/$defs/geometry" } } }] }
+    "widget": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "widgetType", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "widget" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "widgetType": { "enum": ["connector", "image", "motor", "pipe", "text"] }, "geometry": { "$ref": "#/$defs/geometry" }, "bindings": { "type": "array", "items": { "$ref": "#/$defs/binding" } }, "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } }, "props": { "$ref": "#/$defs/safeMap" } } }] },
+    "instance": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "symbolId", "tagScope", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "instance" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "symbolId": { "$ref": "#/$defs/id" }, "tagScope": { "$ref": "#/$defs/safeMap" }, "geometry": { "$ref": "#/$defs/geometry" } } }] }
   }
 }

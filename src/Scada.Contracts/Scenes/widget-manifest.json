@@ -5,6 +5,7 @@
   "actionKinds": ["command"],
   "limits": { "elements": 300, "nesting": 8, "vertices": 4, "segments": 4, "stringLength": 48 },
   "security": { "allowsHtml": false, "allowsSvg": false, "allowsUrls": false, "allowsCode": false },
+  "values": { "safeStringPattern": "^[A-Za-z0-9 _.#%+,-]+$" },
   "bindings": {
     "direct": { "required": ["tier", "tag", "target"], "allowed": ["tier", "tag", "target"] },
     "map": { "required": ["tier", "tag", "target", "map"], "allowed": ["tier", "tag", "target", "map"] }

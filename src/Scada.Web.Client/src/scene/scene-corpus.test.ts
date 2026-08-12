@@ -15,3 +15,10 @@ test("TypeScript validator accepts and rejects the shared corpus", async () => {
     assert.equal(validateScene(fixture.scene).valid, fixture.expectedValid, name);
   }
 });
+
+test("TypeScript validator requires the keyed symbol map", async () => {
+  const fixture = JSON.parse(await readFile(new URL("valid-complex.json", corpusDirectory), "utf8")) as Fixture & { scene: { symbols: unknown } };
+  fixture.scene.symbols = [{ id: "motor-symbol", rootElementId: "motor-body" }];
+
+  assert.equal(validateScene(fixture.scene).valid, false);
+});

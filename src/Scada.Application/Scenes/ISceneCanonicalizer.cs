@@ -1,5 +1,9 @@
+using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Scada.Contracts.Scenes;
 
 namespace Scada.Application.Scenes;
@@ -9,11 +13,11 @@ public sealed record SceneCanonicalizationResult(bool IsValid, byte[]? Canonical
 
 public sealed class SceneCanonicalizer : ISceneCanonicalizer
 {
-    private static readonly string[] UnsafeTokens = ["javascript:", "data:", "http:", "https:", "function", "=>", "onerror", "onload"];
     private static readonly SceneManifest Contract = SceneContract.Manifest;
     private static readonly HashSet<string> WidgetTypes = Contract.WidgetTypes.ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<string> Targets = Contract.BindingTargets.ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<string> Actions = Contract.ActionKinds.ToHashSet(StringComparer.Ordinal);
+    private static readonly Regex SafeString = new(Contract.Values.SafeStringPattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     public SceneCanonicalizationResult ValidateAndCanonicalize(string sceneJson)
     {
@@ -24,7 +28,7 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
             var bytes = Canonicalize(document.RootElement);
             return new(true, bytes, Convert.ToHexStringLower(SHA256.HashData(bytes)), null);
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException or OverflowException)
         { return new(false, null, null, exception.Message); }
     }
 
@@ -43,8 +47,8 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
         foreach (var parent in parents) if (!ids.Contains(parent.Value)) throw new ArgumentException("Dangling parent.");
         foreach (var link in links) if (!ids.Contains(link.From) || !ids.Contains(link.To)) throw new ArgumentException("Dangling link.");
         foreach (var id in ids) { var current = id; for (var depth = 0; parents.TryGetValue(current, out current!); depth++) if (depth >= Contract.Limits.Nesting || current == id) throw new ArgumentException("Parent cycle or nesting limit."); }
-        var symbols = Require(scene, "symbols"); RequireArray(symbols, "symbols"); var roots = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols.EnumerateArray()) { RequireObject(symbol, "symbol"); RequireOnly(symbol, "id", "rootElementId"); var symbolId = Require(symbol, "id").GetString(); var root = Require(symbol, "rootElementId").GetString(); ValidateId(symbolId, "symbol ID"); ValidateId(root, "symbol root ID"); if (!ids.Contains(root!) || !roots.TryAdd(symbolId!, root!)) throw new ArgumentException("Dangling or duplicate symbol."); }
+        var symbols = Require(scene, "symbols"); RequireObject(symbols, "symbols"); var roots = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols.EnumerateObject()) { ValidateId(symbol.Name, "symbol ID"); RequireObject(symbol.Value, "symbol"); RequireOnly(symbol.Value, "rootElementId"); var root = Require(symbol.Value, "rootElementId").GetString(); ValidateId(root, "symbol root ID"); if (!ids.Contains(root!) || !roots.TryAdd(symbol.Name, root!)) throw new ArgumentException("Dangling or duplicate symbol."); }
         foreach (var instance in instances)
         {
             if (!roots.TryGetValue(instance.Symbol, out var root)) throw new ArgumentException("Dangling symbol instance.");
@@ -61,8 +65,8 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
         RequireObject(e, "element"); var id = Require(e, "id").GetString(); ValidateId(id, "element ID"); if (!ids.Add(id!)) throw new ArgumentException("Duplicate element ID."); var kind = Require(e, "kind").GetString();
         var allowed = kind switch { "group" => new[] { "id", "kind", "parentId", "layer", "geometry" }, "widget" => new[] { "id", "kind", "parentId", "layer", "widgetType", "geometry", "bindings", "actions", "props" }, "instance" => new[] { "id", "kind", "parentId", "layer", "symbolId", "tagScope", "geometry" }, _ => throw new ArgumentException("Unknown element kind.") };
         RequireOnly(e, allowed); if (e.TryGetProperty("parentId", out var parent)) { ValidateId(parent.GetString(), "parent ID"); parents.Add(id!, parent.GetString()!); } if (e.TryGetProperty("layer", out var layer) && !layers.Contains(layer.GetString()!)) throw new ArgumentException("Unknown layer.");
-        if (kind == "widget") { var widget = Require(e, "widgetType").GetString(); if (!WidgetTypes.Contains(widget!)) throw new ArgumentException("Unknown widget."); ValidateBindings(e); ValidateActions(e); ValidateStringMap(e, "props"); }
-        if (kind == "instance") { var symbol = Require(e, "symbolId").GetString(); ValidateId(symbol, "symbol ID"); ValidateStringMap(e, "tagScope", required: true); instances.Add((id!, symbol!)); }
+        if (kind == "widget") { var widget = Require(e, "widgetType").GetString(); if (!WidgetTypes.Contains(widget!)) throw new ArgumentException("Unknown widget."); ValidateBindings(e); ValidateActions(e); ValidateSafeMapProperty(e, "props"); }
+        if (kind == "instance") { var symbol = Require(e, "symbolId").GetString(); ValidateId(symbol, "symbol ID"); ValidateSafeMapProperty(e, "tagScope", required: true); instances.Add((id!, symbol!)); }
         ValidateGeometry(Require(e, "geometry"), links);
     }
 
@@ -75,13 +79,35 @@ public sealed class SceneCanonicalizer : ISceneCanonicalizer
         if (kind == "link") { RequireOnly(g, "kind", "fromRef", "toRef", "routing"); if (Require(g, "routing").GetString() is not ("orthogonal" or "straight")) throw new ArgumentException("Unknown link routing."); var from = Require(g, "fromRef").GetString(); var to = Require(g, "toRef").GetString(); ValidateId(from, "link source"); ValidateId(to, "link target"); links.Add((from!, to!)); return; } throw new ArgumentException("Unknown geometry.");
     }
 
-    private static void ValidateBindings(JsonElement e) { if (!e.TryGetProperty("bindings", out var bindings)) return; RequireArray(bindings, "bindings"); foreach (var b in bindings.EnumerateArray()) { RequireObject(b, "binding"); var tier = Require(b, "tier").GetString(); if (tier == "direct") RequireOnly(b, "tier", "tag", "target"); else if (tier == "map") { RequireOnly(b, "tier", "tag", "target", "map"); ValidateStringObject(Require(b, "map"), "binding map"); } else throw new ArgumentException("Unknown binding tier."); ValidateId(Require(b, "tag").GetString(), "tag"); if (!Targets.Contains(Require(b, "target").GetString()!)) throw new ArgumentException("Binding target is not allowed."); } }
-    private static void ValidateActions(JsonElement e) { if (!e.TryGetProperty("actions", out var actions)) return; RequireArray(actions, "actions"); foreach (var a in actions.EnumerateArray()) { RequireObject(a, "action"); RequireOnly(a, "kind", "commandId", "parameters"); if (!Actions.Contains(Require(a, "kind").GetString()!)) throw new ArgumentException("Unknown action."); ValidateId(Require(a, "commandId").GetString(), "command ID"); ValidateStringObject(Require(a, "parameters"), "parameters"); } }
-    private static void ValidateStringMap(JsonElement e, string name, bool required = false) { if (!e.TryGetProperty(name, out var map)) { if (required) throw new ArgumentException($"Missing {name}."); return; } ValidateStringObject(map, name); }
-    private static void ValidateStringObject(JsonElement map, string name) { RequireObject(map, name); foreach (var property in map.EnumerateObject()) { if (property.Name.Length > Contract.Limits.StringLength || property.Value.ValueKind != JsonValueKind.String || !IsSafeString(property.Value.GetString())) throw new ArgumentException($"Unsafe {name}."); } }
-    private static bool IsSafeString(string? value) => !string.IsNullOrEmpty(value) && value.Length <= Contract.Limits.StringLength && !value.Any(c => c is '<' or '>') && !UnsafeTokens.Any(x => value.Contains(x, StringComparison.OrdinalIgnoreCase));
+    private static void ValidateBindings(JsonElement e) { if (!e.TryGetProperty("bindings", out var bindings)) return; RequireArray(bindings, "bindings"); foreach (var b in bindings.EnumerateArray()) { RequireObject(b, "binding"); var tier = Require(b, "tier").GetString(); if (tier == "direct") RequireOnly(b, "tier", "tag", "target"); else if (tier == "map") { RequireOnly(b, "tier", "tag", "target", "map"); ValidateSafeMapValue(Require(b, "map"), "binding map"); } else throw new ArgumentException("Unknown binding tier."); ValidateId(Require(b, "tag").GetString(), "tag"); if (!Targets.Contains(Require(b, "target").GetString()!)) throw new ArgumentException("Binding target is not allowed."); } }
+    private static void ValidateActions(JsonElement e) { if (!e.TryGetProperty("actions", out var actions)) return; RequireArray(actions, "actions"); foreach (var a in actions.EnumerateArray()) { RequireObject(a, "action"); RequireOnly(a, "kind", "commandId", "parameters"); if (!Actions.Contains(Require(a, "kind").GetString()!)) throw new ArgumentException("Unknown action."); ValidateId(Require(a, "commandId").GetString(), "command ID"); ValidateSafeMapValue(Require(a, "parameters"), "parameters"); } }
+    private static void ValidateSafeMapProperty(JsonElement e, string name, bool required = false) { if (!e.TryGetProperty(name, out var map)) { if (required) throw new ArgumentException($"Missing {name}."); return; } ValidateSafeMapValue(map, name); }
+    private static void ValidateSafeMapValue(JsonElement map, string name) { RequireObject(map, name); foreach (var property in map.EnumerateObject()) { ValidateId(property.Name, $"{name} key"); if (property.Value.ValueKind == JsonValueKind.String && IsSafeString(property.Value.GetString())) continue; if (property.Value.ValueKind == JsonValueKind.Number) { FiniteNumber(property.Value, name); continue; } if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False) continue; throw new ArgumentException($"Unsafe {name}."); } }
+    private static bool IsSafeString(string? value) => !string.IsNullOrEmpty(value) && value.Length <= Contract.Limits.StringLength && SafeString.IsMatch(value);
     private static byte[] Canonicalize(JsonElement root) { using var stream = new MemoryStream(); using (var writer = new Utf8JsonWriter(stream)) WriteCanonical(writer, root); return stream.ToArray(); }
-    private static void WriteCanonical(Utf8JsonWriter w, JsonElement e) { switch (e.ValueKind) { case JsonValueKind.Object: w.WriteStartObject(); foreach (var p in e.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { w.WritePropertyName(p.Name); WriteCanonical(w, p.Value); } w.WriteEndObject(); break; case JsonValueKind.Array: w.WriteStartArray(); foreach (var x in e.EnumerateArray()) WriteCanonical(w, x); w.WriteEndArray(); break; case JsonValueKind.String: w.WriteStringValue(e.GetString()); break; case JsonValueKind.Number: w.WriteNumberValue(e.GetDouble()); break; case JsonValueKind.True: w.WriteBooleanValue(true); break; case JsonValueKind.False: w.WriteBooleanValue(false); break; default: throw new ArgumentException("Null is not allowed."); } }
+    private static void WriteCanonical(Utf8JsonWriter w, JsonElement e) { switch (e.ValueKind) { case JsonValueKind.Object: w.WriteStartObject(); foreach (var p in e.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { w.WritePropertyName(p.Name); WriteCanonical(w, p.Value); } w.WriteEndObject(); break; case JsonValueKind.Array: w.WriteStartArray(); foreach (var x in e.EnumerateArray()) WriteCanonical(w, x); w.WriteEndArray(); break; case JsonValueKind.String: w.WriteStringValue(e.GetString()); break; case JsonValueKind.Number: w.WriteRawValue(NormalizeNumber(e.GetRawText()), skipInputValidation: false); break; case JsonValueKind.True: w.WriteBooleanValue(true); break; case JsonValueKind.False: w.WriteBooleanValue(false); break; default: throw new ArgumentException("Null is not allowed."); } }
+
+    internal static string NormalizeNumber(string raw)
+    {
+        var index = 0; var negative = raw[index] == '-'; if (negative) index++;
+        var exponentAt = raw.IndexOfAny(['e', 'E'], index); var mantissaEnd = exponentAt < 0 ? raw.Length : exponentAt;
+        var dot = raw.IndexOf('.', index, mantissaEnd - index); var integerEnd = dot < 0 ? mantissaEnd : dot;
+        var digits = raw[index..integerEnd] + (dot < 0 ? "" : raw[(dot + 1)..mantissaEnd]);
+        var scale = dot < 0 ? 0 : -(mantissaEnd - dot - 1);
+        if (exponentAt >= 0)
+        {
+            if (!int.TryParse(raw[(exponentAt + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var exponent)) throw new ArgumentException("Number exponent is out of range.");
+            scale += exponent;
+        }
+        digits = digits.TrimStart('0');
+        if (digits.Length == 0) return "0";
+        digits = BigInteger.Parse(digits, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        while (digits.Length > 1 && digits[^1] == '0') { digits = digits[..^1]; scale++; }
+        var output = scale >= 0 ? digits + new string('0', scale) : WriteDecimal(digits, -scale);
+        return negative ? "-" + output : output;
+    }
+
+    private static string WriteDecimal(string digits, int fractionLength) => digits.Length > fractionLength ? digits[..(digits.Length - fractionLength)] + "." + digits[(digits.Length - fractionLength)..] : "0." + new string('0', fractionLength - digits.Length) + digits;
     private static JsonElement Require(JsonElement e, string name) => e.TryGetProperty(name, out var value) ? value : throw new ArgumentException($"Missing {name}.");
     private static void RequireOnly(JsonElement e, params string[] names) { foreach (var p in e.EnumerateObject()) if (!names.Contains(p.Name, StringComparer.Ordinal)) throw new ArgumentException($"Unknown property {p.Name}."); }
     private static void RequireObject(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Object) throw new ArgumentException($"{name} must be an object."); }

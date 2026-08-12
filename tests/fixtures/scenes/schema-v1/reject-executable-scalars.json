@@ -1,0 +1,31 @@
+{
+  "expectedValid": false,
+  "scene": {
+    "schemaVersion": 1,
+    "revision": 7,
+    "screenId": "line-1-overview",
+    "canvas": { "width": 1920, "height": 1080, "viewBox": { "x": 0, "y": 0, "width": 1920, "height": 1080 } },
+    "layers": ["background"],
+    "symbols": {},
+    "elements": [
+      {
+        "id": "motor",
+        "kind": "widget",
+        "layer": "background",
+        "widgetType": "motor",
+        "geometry": { "kind": "box", "x": 1, "y": 1, "w": 10, "h": 10, "rotation": 0 },
+        "props": { "label": "alert(1)" },
+        "actions": [{ "kind": "command", "commandId": "start-motor", "parameters": { "target": "alert(1)" } }],
+        "bindings": [{ "tier": "map", "tag": "motor-state", "target": "attr:fill", "map": { "running": "alert(1)" } }]
+      },
+      {
+        "id": "motor-instance",
+        "kind": "instance",
+        "layer": "background",
+        "symbolId": "motor-symbol",
+        "tagScope": { "line": "alert(1)" },
+        "geometry": { "kind": "box", "x": 20, "y": 1, "w": 10, "h": 10, "rotation": 0 }
+      }
+    ]
+  }
+}

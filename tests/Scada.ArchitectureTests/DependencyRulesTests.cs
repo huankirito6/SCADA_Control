@@ -74,10 +74,9 @@ public sealed class DependencyRulesTests
         => Architecture.AssertOnlySystemReferences("Scada.Domain");
 
     [Fact]
-    public void ApplicationIsIndependentOfContractsAndProtobuf()
+    public void ApplicationDependsOnlyOnDomainAndSceneContracts()
         => Architecture.AssertNoReferences(
             "Scada.Application",
-            "Scada.Contracts",
             "Google.Protobuf",
             "Grpc");
 

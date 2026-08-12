@@ -6,7 +6,7 @@
     "screenId": "line-1-overview",
     "canvas": { "width": 1920, "height": 1080, "viewBox": { "x": 0, "y": 0, "width": 1920, "height": 1080 } },
     "layers": ["background", "process"],
-    "symbols": [{ "id": "motor-symbol", "rootElementId": "motor-body" }],
+    "symbols": { "motor-symbol": { "rootElementId": "motor-body" } },
     "elements": [
       { "id": "background", "kind": "group", "layer": "background", "geometry": { "kind": "box", "x": 0, "y": 0, "w": 1920, "h": 1080, "rotation": 0 } },
       { "id": "process", "kind": "group", "layer": "process", "geometry": { "kind": "box", "x": 10, "y": 10, "w": 1800, "h": 900, "rotation": 0 } },

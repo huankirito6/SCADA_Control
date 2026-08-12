@@ -122,6 +122,7 @@
       "scada.application": {
         "type": "Project",
         "dependencies": {
+          "Scada.Contracts": "[1.0.0, )",
           "Scada.Domain": "[1.0.0, )"
         }
       },

@@ -28,7 +28,7 @@ internal static class Architecture
     private static readonly Dictionary<string, string[]> AllowedProjectReferences =
         new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
-            ["Scada.Application"] = ["Scada.Domain"],
+            ["Scada.Application"] = ["Scada.Contracts", "Scada.Domain"],
             ["Scada.Cli"] = ["Scada.Application", "Scada.Contracts"],
             ["Scada.Contracts"] = [],
             ["Scada.Domain"] = [],

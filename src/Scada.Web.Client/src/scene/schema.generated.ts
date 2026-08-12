@@ -7,8 +7,9 @@ const id = (v: unknown): v is string => typeof v === "string" && new RegExp(`^[A
 const object = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const only = (v: JsonObject, keys: readonly string[]) => Object.keys(v).every((key) => keys.includes(key));
-const safe = (v: unknown) => typeof v === "string" && v.length > 0 && v.length <= manifest.limits.stringLength && !/[<>]/.test(v) && !/(javascript:|data:|https?:|function|=>|onerror|onload)/i.test(v);
-const stringMap = (v: unknown) => object(v) && Object.entries(v).every(([key, item]) => key.length <= manifest.limits.stringLength && safe(item));
+const safeString = new RegExp(manifest.values.safeStringPattern);
+const safeScalar = (v: unknown) => (typeof v === "string" && v.length > 0 && v.length <= manifest.limits.stringLength && safeString.test(v)) || finite(v) || typeof v === "boolean";
+const safeMap = (v: unknown) => object(v) && Object.entries(v).every(([key, item]) => id(key) && safeScalar(item));
 
 function geometry(v: unknown, links: string[][]): boolean {
   if (!object(v)) return false;
@@ -20,23 +21,42 @@ function geometry(v: unknown, links: string[][]): boolean {
 }
 
 function validBindings(v: unknown): boolean {
-  return Array.isArray(v) && v.every((b) => object(b) && id(b.tag) && typeof b.target === "string" && targets.has(b.target) && ((b.tier === "direct" && only(b, manifest.bindings.direct.allowed) && manifest.bindings.direct.required.every((key) => key in b)) || (b.tier === "map" && only(b, manifest.bindings.map.allowed) && manifest.bindings.map.required.every((key) => key in b) && stringMap(b.map))));
+  return Array.isArray(v) && v.every((b) => object(b) && id(b.tag) && typeof b.target === "string" && targets.has(b.target) && ((b.tier === "direct" && only(b, manifest.bindings.direct.allowed) && manifest.bindings.direct.required.every((key) => key in b)) || (b.tier === "map" && only(b, manifest.bindings.map.allowed) && manifest.bindings.map.required.every((key) => key in b) && safeMap(b.map))));
 }
-function validActions(v: unknown): boolean { return Array.isArray(v) && v.every((a) => object(a) && typeof a.kind === "string" && actions.has(a.kind) && id(a.commandId) && only(a, manifest.actions.command.allowed) && manifest.actions.command.required.every((key) => key in a) && stringMap(a.parameters)); }
+function validActions(v: unknown): boolean { return Array.isArray(v) && v.every((a) => object(a) && typeof a.kind === "string" && actions.has(a.kind) && id(a.commandId) && only(a, manifest.actions.command.allowed) && manifest.actions.command.required.every((key) => key in a) && safeMap(a.parameters)); }
 
 export function validateScene(v: unknown): SceneValidationResult {
-  if (!object(v) || !only(v, ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"]) || v.schemaVersion !== manifest.schemaVersion || !Number.isInteger(v.revision) || (v.revision as number) < 0 || !id(v.screenId) || !object(v.canvas) || !only(v.canvas, ["width", "height", "viewBox"]) || !finite(v.canvas.width) || !finite(v.canvas.height) || v.canvas.width <= 0 || v.canvas.height <= 0 || !object(v.canvas.viewBox) || !only(v.canvas.viewBox, ["x", "y", "width", "height"]) || !finite(v.canvas.viewBox.x) || !finite(v.canvas.viewBox.y) || !finite(v.canvas.viewBox.width) || !finite(v.canvas.viewBox.height) || v.canvas.viewBox.width <= 0 || v.canvas.viewBox.height <= 0 || !Array.isArray(v.layers) || !v.layers.every(id) || new Set(v.layers).size !== v.layers.length || !Array.isArray(v.symbols) || !Array.isArray(v.elements) || v.elements.length > manifest.limits.elements) return { valid: false, error: "Invalid scene envelope." };
+  if (!object(v) || !only(v, ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"]) || v.schemaVersion !== manifest.schemaVersion || !Number.isInteger(v.revision) || (v.revision as number) < 0 || !id(v.screenId) || !object(v.canvas) || !only(v.canvas, ["width", "height", "viewBox"]) || !finite(v.canvas.width) || !finite(v.canvas.height) || v.canvas.width <= 0 || v.canvas.height <= 0 || !object(v.canvas.viewBox) || !only(v.canvas.viewBox, ["x", "y", "width", "height"]) || !finite(v.canvas.viewBox.x) || !finite(v.canvas.viewBox.y) || !finite(v.canvas.viewBox.width) || !finite(v.canvas.viewBox.height) || v.canvas.viewBox.width <= 0 || v.canvas.viewBox.height <= 0 || !Array.isArray(v.layers) || !v.layers.every(id) || new Set(v.layers).size !== v.layers.length || !object(v.symbols) || !Array.isArray(v.elements) || v.elements.length > manifest.limits.elements) return { valid: false, error: "Invalid scene envelope." };
   const ids = new Set<string>(), parents = new Map<string, string>(), links: string[][] = [], instances: string[][] = [];
   for (const e of v.elements) {
     if (!object(e) || !id(e.id) || ids.has(e.id) || !geometry(e.geometry, links)) return { valid: false, error: "Invalid element." }; ids.add(e.id);
     const allowed = e.kind === "group" ? ["id", "kind", "parentId", "layer", "geometry"] : e.kind === "widget" ? ["id", "kind", "parentId", "layer", "widgetType", "geometry", "bindings", "actions", "props"] : e.kind === "instance" ? ["id", "kind", "parentId", "layer", "symbolId", "tagScope", "geometry"] : [];
     if (!only(e, allowed)) return { valid: false, error: "Invalid element ownership." }; if (e.parentId !== undefined) { if (!id(e.parentId)) return { valid: false, error: "Invalid parent." }; parents.set(e.id, e.parentId); } if (e.layer !== undefined && (!id(e.layer) || !v.layers.includes(e.layer))) return { valid: false, error: "Invalid layer." };
-    if (e.kind === "widget" && (!id(e.widgetType) || !widgets.has(e.widgetType) || (e.bindings !== undefined && !validBindings(e.bindings)) || (e.actions !== undefined && !validActions(e.actions)) || (e.props !== undefined && !stringMap(e.props)))) return { valid: false, error: "Invalid widget." };
-    if (e.kind === "instance" && (!id(e.symbolId) || !stringMap(e.tagScope))) return { valid: false, error: "Invalid instance." }; if (e.kind === "instance") instances.push([e.id, e.symbolId as string]);
+    if (e.kind === "widget" && (!id(e.widgetType) || !widgets.has(e.widgetType) || (e.bindings !== undefined && !validBindings(e.bindings)) || (e.actions !== undefined && !validActions(e.actions)) || (e.props !== undefined && !safeMap(e.props)))) return { valid: false, error: "Invalid widget." };
+    if (e.kind === "instance" && (!id(e.symbolId) || !safeMap(e.tagScope))) return { valid: false, error: "Invalid instance." }; if (e.kind === "instance") instances.push([e.id, e.symbolId as string]);
   }
   if (links.some(([from, to]) => !ids.has(from) || !ids.has(to))) return { valid: false, error: "Dangling link." };
-  for (const start of ids) { let current = start; for (let depth = 0; parents.has(current); depth += 1) { current = parents.get(current) as string; if (current === start || depth >= manifest.limits.nesting || !ids.has(current)) return { valid: false, error: "Invalid hierarchy." }; } }
-  const symbols = new Map<string, string>(); for (const s of v.symbols) { if (!object(s) || !only(s, ["id", "rootElementId"]) || !id(s.id) || !id(s.rootElementId) || !ids.has(s.rootElementId) || symbols.has(s.id)) return { valid: false, error: "Invalid symbol." }; symbols.set(s.id, s.rootElementId); }
-  for (const [instance, symbol] of instances) { const root = symbols.get(symbol); if (!root) return { valid: false, error: "Dangling symbol." }; for (let current = instance; ; ) { if (current === root) return { valid: false, error: "Recursive symbol." }; const parent = parents.get(current); if (!parent) break; current = parent; } }
+  for (const start of ids) {
+    let current = start;
+    for (let depth = 0; parents.has(current); depth += 1) {
+      current = parents.get(current) as string;
+      if (current === start || depth >= manifest.limits.nesting || !ids.has(current)) return { valid: false, error: "Invalid hierarchy." };
+    }
+  }
+  const symbols = new Map<string, string>();
+  for (const [symbolId, symbol] of Object.entries(v.symbols)) {
+    if (!id(symbolId) || !object(symbol) || !only(symbol, ["rootElementId"]) || !id(symbol.rootElementId) || !ids.has(symbol.rootElementId)) return { valid: false, error: "Invalid symbol." };
+    symbols.set(symbolId, symbol.rootElementId);
+  }
+  for (const [instance, symbol] of instances) {
+    const root = symbols.get(symbol);
+    if (!root) return { valid: false, error: "Dangling symbol." };
+    for (let current = instance; ; ) {
+      if (current === root) return { valid: false, error: "Recursive symbol." };
+      const parent = parents.get(current);
+      if (!parent) break;
+      current = parent;
+    }
+  }
   return { valid: true };
 }

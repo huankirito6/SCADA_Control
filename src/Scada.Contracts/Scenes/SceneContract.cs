@@ -7,9 +7,13 @@ public sealed record SceneManifest(
     string[] WidgetTypes,
     string[] BindingTargets,
     string[] ActionKinds,
-    SceneLimits Limits);
+    SceneLimits Limits,
+    SceneValuePolicy Values);
 
 public sealed record SceneLimits(int Elements, int Nesting, int Vertices, int Segments, int StringLength);
+
+/// <summary>Manifest policy consumed by every generated validator. Values are JSON scalars only; strings use this allowlist so scene data cannot carry executable syntax, markup, or URLs.</summary>
+public sealed record SceneValuePolicy(string SafeStringPattern);
 
 public static class SceneContract
 {

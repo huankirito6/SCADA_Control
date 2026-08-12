@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <EmbeddedResource Include="Scenes/widget-manifest.json" />
+    <EmbeddedResource Include="Scenes/scene.schema.json" />
   </ItemGroup>
 </Project>

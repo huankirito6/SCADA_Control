@@ -67,6 +67,28 @@ public sealed class SceneCorpusTests
         Assert.Equal(one.Sha256, onePointZero.Sha256);
     }
 
+    [Fact]
+    public void ServerCanonicalizesEquivalentDecimalLexemesWithoutCollapsingDistinctLargeIntegers()
+    {
+        var canonicalizer = new SceneCanonicalizer();
+        var source = LoadScene("valid-complex.json");
+        var one = canonicalizer.ValidateAndCanonicalize(source.Replace("12.5", "1", StringComparison.Ordinal));
+        var onePointZero = canonicalizer.ValidateAndCanonicalize(source.Replace("12.5", "1.0", StringComparison.Ordinal));
+        var oneExponentZero = canonicalizer.ValidateAndCanonicalize(source.Replace("12.5", "1e0", StringComparison.Ordinal));
+        var lowerInteger = canonicalizer.ValidateAndCanonicalize(source.Replace("12.5", "9007199254740992", StringComparison.Ordinal));
+        var higherInteger = canonicalizer.ValidateAndCanonicalize(source.Replace("12.5", "9007199254740993", StringComparison.Ordinal));
+
+        Assert.True(one.IsValid, one.Error);
+        Assert.True(onePointZero.IsValid, onePointZero.Error);
+        Assert.True(oneExponentZero.IsValid, oneExponentZero.Error);
+        Assert.True(lowerInteger.IsValid, lowerInteger.Error);
+        Assert.True(higherInteger.IsValid, higherInteger.Error);
+        Assert.Equal(one.CanonicalBytes, onePointZero.CanonicalBytes);
+        Assert.Equal(one.CanonicalBytes, oneExponentZero.CanonicalBytes);
+        Assert.NotEqual(lowerInteger.CanonicalBytes, higherInteger.CanonicalBytes);
+        Assert.NotEqual(lowerInteger.Sha256, higherInteger.Sha256);
+    }
+
     private static string LoadScene(string fixtureName)
     {
         using var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(CorpusDirectory, fixtureName)));
