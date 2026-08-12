@@ -5,6 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/Scada.Infrastructure.Sqlite/Scada.Infrastructure.Sqlite.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
