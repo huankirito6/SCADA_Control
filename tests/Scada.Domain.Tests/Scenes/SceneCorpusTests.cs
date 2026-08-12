@@ -54,6 +54,19 @@ public sealed class SceneCorpusTests
         }
     }
 
+    [Fact]
+    public void ServerCanonicalizesEquivalentFiniteNumberLexemesToTheSameBytesAndHash()
+    {
+        var canonicalizer = new SceneCanonicalizer();
+        var one = canonicalizer.ValidateAndCanonicalize(LoadScene("valid-complex.json"));
+        var onePointZero = canonicalizer.ValidateAndCanonicalize(LoadScene("valid-complex.json").Replace("12.5", "1.25e1", StringComparison.Ordinal));
+
+        Assert.True(one.IsValid, one.Error);
+        Assert.True(onePointZero.IsValid, onePointZero.Error);
+        Assert.Equal(one.CanonicalBytes, onePointZero.CanonicalBytes);
+        Assert.Equal(one.Sha256, onePointZero.Sha256);
+    }
+
     private static string LoadScene(string fixtureName)
     {
         using var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(CorpusDirectory, fixtureName)));

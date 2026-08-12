@@ -4,5 +4,12 @@
   "bindingTargets": ["attr:fill", "attr:opacity", "attr:stroke", "text:value", "visibility"],
   "actionKinds": ["command"],
   "limits": { "elements": 300, "nesting": 8, "vertices": 4, "segments": 4, "stringLength": 48 },
-  "security": { "allowsHtml": false, "allowsSvg": false, "allowsUrls": false, "allowsCode": false }
+  "security": { "allowsHtml": false, "allowsSvg": false, "allowsUrls": false, "allowsCode": false },
+  "bindings": {
+    "direct": { "required": ["tier", "tag", "target"], "allowed": ["tier", "tag", "target"] },
+    "map": { "required": ["tier", "tag", "target", "map"], "allowed": ["tier", "tag", "target", "map"] }
+  },
+  "actions": {
+    "command": { "required": ["kind", "commandId", "parameters"], "allowed": ["kind", "commandId", "parameters"] }
+  }
 }

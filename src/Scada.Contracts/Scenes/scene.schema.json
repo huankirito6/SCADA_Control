@@ -1,30 +1,33 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "scada.scene.schema.v1",
-  "title": "SCADA Scene v1",
-  "type": "object",
-  "additionalProperties": false,
+  "type": "object", "additionalProperties": false,
   "required": ["schemaVersion", "revision", "screenId", "canvas", "layers", "symbols", "elements"],
   "properties": {
-    "schemaVersion": { "const": 1 },
-    "revision": { "type": "integer", "minimum": 0 },
-    "screenId": { "$ref": "#/$defs/id" },
-    "canvas": { "$ref": "#/$defs/canvas" },
-    "layers": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+    "schemaVersion": { "const": 1 }, "revision": { "type": "integer", "minimum": 0 }, "screenId": { "$ref": "#/$defs/id" },
+    "canvas": { "$ref": "#/$defs/canvas" }, "layers": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
     "symbols": { "type": "array", "items": { "$ref": "#/$defs/symbol" } },
-    "elements": { "type": "array", "maxItems": 300, "items": { "$ref": "#/$defs/element" } }
+    "elements": { "type": "array", "maxItems": { "$ref": "widget-manifest.json#/limits/elements" }, "items": { "$ref": "#/$defs/element" } }
   },
   "$defs": {
     "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,48}$" },
-    "number": { "type": "number" },
-    "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } },
-    "canvas": { "type": "object", "additionalProperties": false, "required": ["width", "height", "viewBox"], "properties": { "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "viewBox": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" }, "width": { "$ref": "#/$defs/number" }, "height": { "$ref": "#/$defs/number" } } } } },
+    "safeString": { "type": "string", "maxLength": { "$ref": "widget-manifest.json#/limits/stringLength" }, "pattern": "^(?!.*(?:<|>|javascript:|data:|https?://|on[a-z]+\\s*=|function\\s*\\(|=>)).*$" },
+    "number": { "type": "number" }, "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } },
+    "canvas": { "type": "object", "additionalProperties": false, "required": ["width", "height", "viewBox"], "properties": { "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "viewBox": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } } } },
     "box": { "type": "object", "additionalProperties": false, "required": ["kind", "x", "y", "w", "h", "rotation"], "properties": { "kind": { "const": "box" }, "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" }, "w": { "type": "number", "exclusiveMinimum": 0 }, "h": { "type": "number", "exclusiveMinimum": 0 }, "rotation": { "$ref": "#/$defs/number" } } },
-    "points": { "type": "object", "additionalProperties": false, "required": ["kind", "vertices"], "properties": { "kind": { "const": "points" }, "vertices": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "$ref": "#/$defs/point" } } } },
-    "path": { "type": "object", "additionalProperties": false, "required": ["kind", "segments"], "properties": { "kind": { "const": "path" }, "segments": { "type": "array", "maxItems": 4, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "x", "y"], "properties": { "kind": { "enum": ["move", "line"] }, "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } } } } },
+    "points": { "type": "object", "additionalProperties": false, "required": ["kind", "vertices"], "properties": { "kind": { "const": "points" }, "vertices": { "type": "array", "minItems": 2, "maxItems": { "$ref": "widget-manifest.json#/limits/vertices" }, "items": { "$ref": "#/$defs/point" } } } },
+    "path": { "type": "object", "additionalProperties": false, "required": ["kind", "segments"], "properties": { "kind": { "const": "path" }, "segments": { "type": "array", "maxItems": { "$ref": "widget-manifest.json#/limits/segments" }, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "x", "y"], "properties": { "kind": { "enum": ["move", "line"] }, "x": { "$ref": "#/$defs/number" }, "y": { "$ref": "#/$defs/number" } } } } } },
     "link": { "type": "object", "additionalProperties": false, "required": ["kind", "fromRef", "toRef", "routing"], "properties": { "kind": { "const": "link" }, "fromRef": { "$ref": "#/$defs/id" }, "toRef": { "$ref": "#/$defs/id" }, "routing": { "enum": ["orthogonal", "straight"] } } },
     "geometry": { "oneOf": [{ "$ref": "#/$defs/box" }, { "$ref": "#/$defs/points" }, { "$ref": "#/$defs/path" }, { "$ref": "#/$defs/link" }] },
     "symbol": { "type": "object", "additionalProperties": false, "required": ["id", "rootElementId"], "properties": { "id": { "$ref": "#/$defs/id" }, "rootElementId": { "$ref": "#/$defs/id" } } },
-    "element": { "type": "object", "additionalProperties": false, "required": ["id", "kind", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "enum": ["group", "widget", "instance"] }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "widgetType": { "enum": ["connector", "image", "motor", "pipe", "text"] }, "symbolId": { "$ref": "#/$defs/id" }, "tagScope": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 48 } }, "geometry": { "$ref": "#/$defs/geometry" }, "bindings": { "type": "array" }, "actions": { "type": "array" }, "props": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 48 } } } }
+    "binding": { "oneOf": [{ "type": "object", "additionalProperties": false, "required": ["tier", "tag", "target"], "properties": { "tier": { "const": "direct" }, "tag": { "$ref": "#/$defs/id" }, "target": { "enum": { "$ref": "widget-manifest.json#/bindingTargets" } } } }, { "type": "object", "additionalProperties": false, "required": ["tier", "tag", "target", "map"], "properties": { "tier": { "const": "map" }, "tag": { "$ref": "#/$defs/id" }, "target": { "enum": { "$ref": "widget-manifest.json#/bindingTargets" } }, "map": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } } } }] },
+    "action": { "type": "object", "additionalProperties": false, "required": ["kind", "commandId", "parameters"], "properties": { "kind": { "enum": { "$ref": "widget-manifest.json#/actionKinds" } }, "commandId": { "$ref": "#/$defs/id" }, "parameters": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } } } },
+    "baseElement": { "type": "object", "required": ["id", "kind", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "geometry": { "$ref": "#/$defs/geometry" } } },
+    "element": { "oneOf": [
+      { "$ref": "#/$defs/group" }, { "$ref": "#/$defs/widget" }, { "$ref": "#/$defs/instance" }
+    ] },
+    "group": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "group" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "geometry": { "$ref": "#/$defs/geometry" } } }] },
+    "widget": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "widgetType", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "widget" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "widgetType": { "enum": { "$ref": "widget-manifest.json#/widgetTypes" } }, "geometry": { "$ref": "#/$defs/geometry" }, "bindings": { "type": "array", "items": { "$ref": "#/$defs/binding" } }, "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } }, "props": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } } } }] },
+    "instance": { "allOf": [{ "$ref": "#/$defs/baseElement" }, { "type": "object", "additionalProperties": false, "required": ["id", "kind", "symbolId", "tagScope", "geometry"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "instance" }, "parentId": { "$ref": "#/$defs/id" }, "layer": { "$ref": "#/$defs/id" }, "symbolId": { "$ref": "#/$defs/id" }, "tagScope": { "type": "object", "additionalProperties": { "$ref": "#/$defs/safeString" } }, "geometry": { "$ref": "#/$defs/geometry" } } }] }
   }
 }
