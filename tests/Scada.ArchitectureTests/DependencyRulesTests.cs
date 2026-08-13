@@ -46,7 +46,7 @@ public sealed class DependencyRulesTests
                 () => Architecture.AssertProjectDependencyGraph(
                     fixtureProject,
                     "Scada.Web",
-                    ["Scada.Application", "Scada.Contracts"],
+                    ["Scada.Hosting"],
                     []));
 
             Assert.Contains("Microsoft.Data.Sqlite", exception.Message, StringComparison.Ordinal);

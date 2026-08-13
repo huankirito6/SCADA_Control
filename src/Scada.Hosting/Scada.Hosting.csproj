@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Scada.Infrastructure.Sqlite/Scada.Infrastructure.Sqlite.csproj" />
+  </ItemGroup>
+</Project>

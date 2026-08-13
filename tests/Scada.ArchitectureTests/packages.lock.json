@@ -183,6 +183,12 @@
           "Scada.Drivers.Abstractions": "[1.0.0, )"
         }
       },
+      "scada.hosting": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Infrastructure.Sqlite": "[1.0.0, )"
+        }
+      },
       "scada.infrastructure.sqlite": {
         "type": "Project",
         "dependencies": {
@@ -208,7 +214,8 @@
         "type": "Project",
         "dependencies": {
           "Scada.Application": "[1.0.0, )",
-          "Scada.Contracts": "[1.0.0, )"
+          "Scada.Contracts": "[1.0.0, )",
+          "Scada.Hosting": "[1.0.0, )"
         }
       },
       "Microsoft.Data.Sqlite": {

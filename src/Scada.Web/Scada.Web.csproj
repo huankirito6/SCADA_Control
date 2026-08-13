@@ -1,7 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <ItemGroup>
-    <ProjectReference Include="../Scada.Application/Scada.Application.csproj" />
-    <ProjectReference Include="../Scada.Contracts/Scada.Contracts.csproj" />
+    <ProjectReference Include="../Scada.Hosting/Scada.Hosting.csproj" />
   </ItemGroup>
 </Project>

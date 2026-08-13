@@ -15,6 +15,7 @@ npm-debug.log*
 # Build and coverage output
 artifacts/
 coverage/
+.superpowers/
 
 # Local Git worktrees
 .worktrees/

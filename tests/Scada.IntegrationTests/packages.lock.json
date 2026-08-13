@@ -126,11 +126,54 @@
           "Scada.Domain": "[1.0.0, )"
         }
       },
+      "scada.cli": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Application": "[1.0.0, )",
+          "Scada.Contracts": "[1.0.0, )"
+        }
+      },
       "scada.contracts": {
         "type": "Project"
       },
       "scada.domain": {
         "type": "Project"
+      },
+      "scada.drivers.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Domain": "[1.0.0, )"
+        }
+      },
+      "scada.drivers.modbusrtu": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Drivers.Abstractions": "[1.0.0, )"
+        }
+      },
+      "scada.drivers.modbustcp": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Drivers.Abstractions": "[1.0.0, )"
+        }
+      },
+      "scada.drivers.opcua": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Drivers.Abstractions": "[1.0.0, )"
+        }
+      },
+      "scada.drivers.simulator": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Drivers.Abstractions": "[1.0.0, )"
+        }
+      },
+      "scada.hosting": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Infrastructure.Sqlite": "[1.0.0, )"
+        }
       },
       "scada.infrastructure.sqlite": {
         "type": "Project",
@@ -138,6 +181,27 @@
           "Microsoft.Data.Sqlite": "[10.0.10, )",
           "Scada.Application": "[1.0.0, )",
           "Scada.Domain": "[1.0.0, )"
+        }
+      },
+      "scada.runtime": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Application": "[1.0.0, )",
+          "Scada.Contracts": "[1.0.0, )",
+          "Scada.Drivers.Abstractions": "[1.0.0, )",
+          "Scada.Drivers.ModbusRtu": "[1.0.0, )",
+          "Scada.Drivers.ModbusTcp": "[1.0.0, )",
+          "Scada.Drivers.OpcUa": "[1.0.0, )",
+          "Scada.Drivers.Simulator": "[1.0.0, )",
+          "Scada.Infrastructure.Sqlite": "[1.0.0, )"
+        }
+      },
+      "scada.web": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Application": "[1.0.0, )",
+          "Scada.Contracts": "[1.0.0, )",
+          "Scada.Hosting": "[1.0.0, )"
         }
       },
       "Microsoft.Data.Sqlite": {

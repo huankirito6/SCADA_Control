@@ -21,6 +21,7 @@ internal static class Architecture
         "Scada.Drivers.OpcUa",
         "Scada.Drivers.Simulator",
         "Scada.Infrastructure.Sqlite",
+        "Scada.Hosting",
         "Scada.Runtime",
         "Scada.Web",
     ];
@@ -38,6 +39,7 @@ internal static class Architecture
             ["Scada.Drivers.OpcUa"] = ["Scada.Drivers.Abstractions"],
             ["Scada.Drivers.Simulator"] = ["Scada.Drivers.Abstractions"],
             ["Scada.Infrastructure.Sqlite"] = ["Scada.Application", "Scada.Domain"],
+            ["Scada.Hosting"] = ["Scada.Infrastructure.Sqlite"],
             ["Scada.Runtime"] =
             [
                 "Scada.Application",
@@ -49,7 +51,7 @@ internal static class Architecture
                 "Scada.Drivers.Simulator",
                 "Scada.Infrastructure.Sqlite",
             ],
-            ["Scada.Web"] = ["Scada.Application", "Scada.Contracts"],
+            ["Scada.Web"] = ["Scada.Hosting"],
         };
 
     private static readonly Dictionary<string, string[]> AllowedPackageReferences =
