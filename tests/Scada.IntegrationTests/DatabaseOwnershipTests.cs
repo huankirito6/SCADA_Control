@@ -1,5 +1,8 @@
 using Microsoft.Data.Sqlite;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using Scada.Cli.Database;
+using Scada.Deployment;
 using Scada.Hosting.Database;
 using Scada.Infrastructure.Sqlite.Migrations;
 using Scada.Infrastructure.Sqlite.Migrations.AuditWeb;
@@ -14,15 +17,25 @@ public sealed class DatabaseOwnershipTests : IDisposable
     private readonly string _directory = Path.Combine(Path.GetTempPath(), $"scada-task7-{Guid.NewGuid():N}");
 
     [Fact]
+    public void StartupFailureDiagnosticFormatsOnlyBoundedExceptionTypeAndSingleLineMessage()
+    {
+        string diagnostic = ServiceStartupFailureDiagnostic.Format(new InvalidOperationException($"bad{Environment.NewLine}value", new ArgumentException("secret")));
+
+        Assert.Equal("InvalidOperationException: bad value", diagnostic);
+        Assert.DoesNotContain("secret", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain(Environment.NewLine, diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void WebCompositionResolvesActualCurrentSidAndMigratesOnlyWebDatabases()
     {
         using TemporaryDatabaseRoot root = CreateRoot();
         WebServiceDatabaseStartup.MigrateOwnedDatabases(root.Path, CurrentProcessPolicy(ServiceIdentity.Web));
 
-        AssertLedger(root.DatabasePath("config.db"), ConfigMigrations.All.Single().Id);
-        AssertLedger(root.DatabasePath("audit-web.db"), AuditWebMigrations.All.Single().Id);
-        Assert.False(File.Exists(root.DatabasePath("alarms.db")));
+        AssertLedger(root.DatabasePath("web", "config.db"), ConfigMigrations.All.Single().Id);
+        AssertLedger(root.DatabasePath("web", "audit-web.db"), AuditWebMigrations.All.Single().Id);
+        Assert.False(File.Exists(root.DatabasePath("runtime", "alarms.db")));
     }
 
     [Fact]
@@ -30,7 +43,7 @@ public sealed class DatabaseOwnershipTests : IDisposable
     public void RuntimeCompositionMigratesCatalogEveryExistingPartitionAndNewPartition()
     {
         using TemporaryDatabaseRoot root = CreateRoot();
-        string partitions = Path.Combine(root.Path, "historian-partitions");
+        string partitions = Path.Combine(root.Path, "runtime", "historian-partitions");
         Directory.CreateDirectory(partitions);
         File.Create(Path.Combine(partitions, "2026-08.db")).Dispose();
         File.Create(Path.Combine(partitions, "2026-09.db")).Dispose();
@@ -38,7 +51,7 @@ public sealed class DatabaseOwnershipTests : IDisposable
         RuntimeServiceDatabaseStartup.MigrateOwnedDatabases(root.Path, CurrentProcessPolicy(ServiceIdentity.Runtime));
         RuntimeServiceDatabaseStartup.OpenPartition(root.Path, "2026-10", CurrentProcessPolicy(ServiceIdentity.Runtime));
 
-        AssertLedger(root.DatabasePath("historian-catalog.db"), HistorianMigrations.Catalog.Single().Id);
+        AssertLedger(root.DatabasePath("runtime", "historian-catalog.db"), HistorianMigrations.Catalog.Single().Id);
         AssertLedger(Path.Combine(partitions, "2026-08.db"), HistorianMigrations.Partition.Single().Id);
         AssertLedger(Path.Combine(partitions, "2026-09.db"), HistorianMigrations.Partition.Single().Id);
         AssertLedger(Path.Combine(partitions, "2026-10.db"), HistorianMigrations.Partition.Single().Id);
@@ -57,7 +70,46 @@ public sealed class DatabaseOwnershipTests : IDisposable
     {
         using TemporaryDatabaseRoot root = CreateRoot();
         Assert.Throws<DatabaseOwnershipException>(() => WebServiceDatabaseStartup.MigrateOwnedDatabases(root.Path, CurrentProcessPolicy(ServiceIdentity.Runtime)));
-        Assert.False(File.Exists(root.DatabasePath("config.db")));
+        Assert.False(File.Exists(root.DatabasePath("web", "config.db")));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void MigrationRejectsOwnerDirectoryAlsoWritableByOtherConfiguredOwner()
+    {
+        using TemporaryDatabaseRoot root = CreateRoot();
+        string ownerDirectory = Path.Combine(root.Path, "web");
+        Directory.CreateDirectory(ownerDirectory);
+        SecurityIdentifier currentSid = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("Current process has no Windows SID.");
+        SecurityIdentifier otherOwnerSid = new("S-1-5-21-1-2-3-4");
+        SetOwnerDirectoryAccess(ownerDirectory, currentSid, otherOwnerSid);
+        ServiceIdentityPolicy policy = new(new Dictionary<string, ServiceIdentity>
+        {
+            [currentSid.Value] = ServiceIdentity.Web,
+            [otherOwnerSid.Value] = ServiceIdentity.Runtime
+        });
+
+        Assert.Throws<DatabaseOwnershipException>(() => WebServiceDatabaseStartup.MigrateOwnedDatabases(root.Path, policy));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void MigrationAllowsOwnerDirectoryWritableOnlyByOwnerSystemAndAdministrators()
+    {
+        using TemporaryDatabaseRoot root = CreateRoot();
+        string ownerDirectory = Path.Combine(root.Path, "web");
+        Directory.CreateDirectory(ownerDirectory);
+        SecurityIdentifier currentSid = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("Current process has no Windows SID.");
+        SetOwnerDirectoryAccess(ownerDirectory, currentSid);
+        ServiceIdentityPolicy policy = new(new Dictionary<string, ServiceIdentity>
+        {
+            [currentSid.Value] = ServiceIdentity.Web,
+            ["S-1-5-21-1-2-3-4"] = ServiceIdentity.Runtime
+        });
+
+        WebServiceDatabaseStartup.MigrateOwnedDatabases(root.Path, policy);
+
+        AssertLedger(root.DatabasePath("web", "config.db"), ConfigMigrations.All.Single().Id);
     }
 
     [Fact]
@@ -141,8 +193,7 @@ public sealed class DatabaseOwnershipTests : IDisposable
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void AcknowledgementPipeRejectsMissingOwnerSidBeforeServiceStart()
     {
-        using EnvironmentVariableScope web = new("SCADA_WEB_SERVICE_SID", null);
-        using WindowsServiceMigrationRequester requester = new();
+        using WindowsServiceMigrationRequester requester = new(Deployment("", "S-1-5-21-1-2-3-4"));
 
         InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() => requester.PrepareMigration("WebScada"));
 
@@ -153,8 +204,7 @@ public sealed class DatabaseOwnershipTests : IDisposable
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void AcknowledgementPipeRejectsInvalidOwnerSidBeforeServiceStart()
     {
-        using EnvironmentVariableScope web = new("SCADA_WEB_SERVICE_SID", "not-a-sid");
-        using WindowsServiceMigrationRequester requester = new();
+        using WindowsServiceMigrationRequester requester = new(Deployment("not-a-sid", "S-1-5-21-1-2-3-4"));
 
         InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() => requester.PrepareMigration("WebScada"));
 
@@ -191,6 +241,18 @@ public sealed class DatabaseOwnershipTests : IDisposable
     {
         return ServiceIdentityPolicy.ForTestCurrentProcess(identity);
     }
+    private static DeploymentConfiguration Deployment(string webSid, string runtimeSid) => new(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "scada-task7-deployment")), webSid, runtimeSid);
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void SetOwnerDirectoryAccess(string path, SecurityIdentifier ownerSid, SecurityIdentifier? otherOwnerSid = null)
+    {
+        DirectorySecurity security = new();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, AccessControlType.Allow));
+        if (otherOwnerSid is not null) security.AddAccessRule(new FileSystemAccessRule(otherOwnerSid, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
+        new DirectoryInfo(path).SetAccessControl(security);
+    }
 
     private sealed class FixtureScm(params object[] states) : IServiceControlManager
     {
@@ -226,17 +288,6 @@ public sealed class DatabaseOwnershipTests : IDisposable
         public void RequestMigration(string serviceName) => Calls.Add($"request:{serviceName}");
         public bool WaitForMigration(string serviceName, TimeSpan timeout) { Calls.Add($"wait:{serviceName}"); return true; }
     }
-    private sealed class EnvironmentVariableScope : IDisposable
-    {
-        private readonly string _name;
-        private readonly string? _previous;
-        public EnvironmentVariableScope(string name, string? value)
-        {
-            _name = name;
-            _previous = Environment.GetEnvironmentVariable(name);
-            Environment.SetEnvironmentVariable(name, value);
-        }
-        public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
-    }
-    private sealed class TemporaryDatabaseRoot(string path) : IDisposable { public string Path { get; } = path; public string DatabasePath(string name) => System.IO.Path.Combine(Path, name); public void Dispose() { } }
+
+    private sealed class TemporaryDatabaseRoot(string path) : IDisposable { public string Path { get; } = path; public string DatabasePath(params string[] segments) => System.IO.Path.Combine([Path, .. segments]); public void Dispose() { } }
 }

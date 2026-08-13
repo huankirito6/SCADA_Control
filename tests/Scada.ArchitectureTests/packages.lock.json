@@ -144,10 +144,14 @@
         "type": "Project",
         "dependencies": {
           "Scada.Application": "[1.0.0, )",
-          "Scada.Contracts": "[1.0.0, )"
+          "Scada.Contracts": "[1.0.0, )",
+          "Scada.Deployment": "[1.0.0, )"
         }
       },
       "scada.contracts": {
+        "type": "Project"
+      },
+      "scada.deployment": {
         "type": "Project"
       },
       "scada.domain": {
@@ -186,6 +190,7 @@
       "scada.hosting": {
         "type": "Project",
         "dependencies": {
+          "Scada.Deployment": "[1.0.0, )",
           "Scada.Infrastructure.Sqlite": "[1.0.0, )"
         }
       },
@@ -194,6 +199,7 @@
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.10, )",
           "Scada.Application": "[1.0.0, )",
+          "Scada.Deployment": "[1.0.0, )",
           "Scada.Domain": "[1.0.0, )"
         }
       },

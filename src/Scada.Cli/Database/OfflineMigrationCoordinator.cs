@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using Scada.Deployment;
 
 namespace Scada.Cli.Database;
 
@@ -63,6 +64,9 @@ public sealed class WindowsServiceControlManager : IServiceControlManager
 public sealed class WindowsServiceMigrationRequester : IAcknowledgingServiceMigrationRequester, IDisposable
 {
     private readonly Dictionary<string, PendingMigration> _pending = new(StringComparer.Ordinal);
+    private readonly DeploymentConfiguration _deployment;
+
+    public WindowsServiceMigrationRequester(DeploymentConfiguration deployment) => _deployment = deployment ?? throw new ArgumentNullException(nameof(deployment));
 
     public void PrepareMigration(string serviceName)
     {
@@ -71,7 +75,7 @@ public sealed class WindowsServiceMigrationRequester : IAcknowledgingServiceMigr
 
         string operationId = Guid.NewGuid().ToString("N");
         string pipeName = $"ScadaMigration-{operationId}";
-        SecurityIdentifier ownerSid = ResolveOwnerSid(serviceName);
+        SecurityIdentifier ownerSid = new(_deployment.OwnerSid(serviceName));
         PipeSecurity security = CreateAcknowledgementPipeSecurity(ownerSid);
         NamedPipeServerStream pipe = NamedPipeServerStreamAcl.Create(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, security);
         _pending.Add(serviceName, new PendingMigration(operationId, pipeName, pipe));
@@ -80,7 +84,8 @@ public sealed class WindowsServiceMigrationRequester : IAcknowledgingServiceMigr
     public void RequestMigration(string serviceName)
     {
         if (!_pending.TryGetValue(serviceName, out PendingMigration? pending)) throw new InvalidOperationException($"Prepare migration before requesting '{serviceName}'.");
-        WindowsServiceControlManager.Execute("start", serviceName, "migration-once", pending.OperationId, pending.PipeName);
+        string sourcePath = _deployment.SourcePath ?? throw new InvalidOperationException("Migration requests require a deployment configuration loaded from a protected path.");
+        WindowsServiceControlManager.Execute(CreateStartArguments(serviceName, pending.OperationId, pending.PipeName, sourcePath));
     }
 
     public bool WaitForMigration(string serviceName, TimeSpan timeout)
@@ -107,6 +112,12 @@ public sealed class WindowsServiceMigrationRequester : IAcknowledgingServiceMigr
         _pending.Clear();
     }
 
+    public static string[] CreateStartArguments(string serviceName, string operationId, string pipeName, string deploymentPath)
+    {
+        if (string.IsNullOrWhiteSpace(serviceName) || string.IsNullOrWhiteSpace(operationId) || string.IsNullOrWhiteSpace(pipeName) || string.IsNullOrWhiteSpace(deploymentPath) || !Path.IsPathFullyQualified(deploymentPath)) throw new ArgumentException("SCM migration request requires non-empty values and an absolute deployment path.");
+        return ["start", serviceName, "migration-once", operationId, pipeName, "--deployment", Path.GetFullPath(deploymentPath)];
+    }
+
     private sealed record PendingMigration(string OperationId, string PipeName, NamedPipeServerStream Pipe) : IDisposable
     {
         public void Dispose() => Pipe.Dispose();
@@ -120,50 +131,35 @@ public sealed class WindowsServiceMigrationRequester : IAcknowledgingServiceMigr
         PipeSecurity security = new();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         security.AddAccessRule(new PipeAccessRule(cliSid, PipeAccessRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), PipeAccessRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new PipeAccessRule(ownerSid, PipeAccessRights.Read | PipeAccessRights.Write | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
+        if (!ownerSid.Equals(cliSid)) security.AddAccessRule(new PipeAccessRule(ownerSid, PipeAccessRights.Read | PipeAccessRights.Write | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
         return security;
-    }
-
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static SecurityIdentifier ResolveOwnerSid(string serviceName)
-    {
-        string variable = serviceName switch
-        {
-            "WebScada" => "SCADA_WEB_SERVICE_SID",
-            "RuntimeScada" => "SCADA_RUNTIME_SERVICE_SID",
-            _ => throw new ArgumentException("Unknown owner service.", nameof(serviceName))
-        };
-        string? configuredSid = Environment.GetEnvironmentVariable(variable);
-        if (string.IsNullOrWhiteSpace(configuredSid)) throw new InvalidOperationException($"Required deployment configuration '{variable}' is missing.");
-        try { return new SecurityIdentifier(configuredSid); }
-        catch (ArgumentException) { throw new InvalidOperationException($"Deployment configuration '{variable}' is not a valid Windows SID."); }
     }
 }
 
 public sealed class OfflineMigrationCoordinator
 {
-    private const string WebService = "WebScada";
-    private const string RuntimeService = "RuntimeScada";
+    private readonly string _webService;
+    private readonly string _runtimeService;
     private readonly IServiceControlManager _services;
     private readonly IAcknowledgingServiceMigrationRequester _requester;
     private readonly TimeSpan _acknowledgementTimeout;
 
-    public OfflineMigrationCoordinator(IServiceControlManager services, IServiceMigrationRequester requester, TimeSpan? acknowledgementTimeout = null)
+    public OfflineMigrationCoordinator(IServiceControlManager services, IServiceMigrationRequester requester, TimeSpan? acknowledgementTimeout = null, DeploymentConfiguration? deployment = null)
     {
         _services = services;
         _requester = requester as IAcknowledgingServiceMigrationRequester ?? throw new ArgumentException("Offline migration transport must acknowledge completed owner migration.", nameof(requester));
+        _webService = deployment?.EffectiveWebServiceName ?? "WebScada";
+        _runtimeService = deployment?.EffectiveRuntimeServiceName ?? "RuntimeScada";
         _acknowledgementTimeout = acknowledgementTimeout ?? TimeSpan.FromMinutes(2);
         if (_acknowledgementTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(acknowledgementTimeout));
     }
 
     public void RequestOwnerMigration()
     {
-        VerifyStopped(WebService);
-        VerifyStopped(RuntimeService);
-        RequestAndVerify(WebService);
-        RequestAndVerify(RuntimeService);
+        VerifyStopped(_webService);
+        VerifyStopped(_runtimeService);
+        RequestAndVerify(_webService);
+        RequestAndVerify(_runtimeService);
     }
 
     private void RequestAndVerify(string serviceName)
@@ -182,9 +178,9 @@ public sealed class OfflineMigrationCoordinator
 
 public static class OfflineMigrationCommand
 {
-    public static void RequestOwnerMigration()
+    public static void RequestOwnerMigration(DeploymentConfiguration deployment)
     {
-        using WindowsServiceMigrationRequester requester = new();
-        new OfflineMigrationCoordinator(new WindowsServiceControlManager(), requester).RequestOwnerMigration();
+        using WindowsServiceMigrationRequester requester = new(deployment);
+        new OfflineMigrationCoordinator(new WindowsServiceControlManager(), requester, deployment: deployment).RequestOwnerMigration();
     }
 }

@@ -3,28 +3,43 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using Scada.Infrastructure.Sqlite.Migrations;
+using Scada.Deployment;
 
 namespace Scada.Hosting.Database;
 
 public static class ServiceHostRunner
 {
-    public static void RunWindowsService(string serviceName)
+    public static string StartupDiagnosticPath(string deploymentPath, string serviceName) => deploymentPath + "." + serviceName + ".startup-diagnostic.txt";
+
+    public static void RunWindowsService(string serviceName, string deploymentPath)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows SCM hosting is only supported on Windows.");
-        NativeWindowsService service = new(serviceName);
+        using NativeWindowsService service = new(serviceName, deploymentPath);
         SERVICE_TABLE_ENTRY[] table = [new() { ServiceName = serviceName, ServiceProc = service.Main }, new()];
         if (!StartServiceCtrlDispatcher(table)) throw new Win32Exception(Marshal.GetLastWin32Error(), "StartServiceCtrlDispatcher failed.");
     }
 
-    public static void RunMigrationOnce(string serviceName, string operationId, string pipeName)
+    public static string ReadProcessDeploymentPath(string[] processArguments)
+    {
+        ArgumentNullException.ThrowIfNull(processArguments);
+        int index = Array.FindIndex(processArguments, argument => string.Equals(argument, "--deployment", StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= processArguments.Length || Array.FindIndex(processArguments, index + 1, argument => string.Equals(argument, "--deployment", StringComparison.OrdinalIgnoreCase)) >= 0 || !Path.IsPathFullyQualified(processArguments[index + 1])) throw new ArgumentException("Service process requires exactly one --deployment <absolute path> argument.", nameof(processArguments));
+        return Path.GetFullPath(processArguments[index + 1]);
+    }
+
+    public static ServiceMigrationOnceArguments ParseMigrationOnceArguments(string[] serviceArguments)
+    {
+        ArgumentNullException.ThrowIfNull(serviceArguments);
+        if (serviceArguments.Length != 5 || !string.Equals(serviceArguments[0], "migration-once", StringComparison.OrdinalIgnoreCase) || !string.Equals(serviceArguments[3], "--deployment", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(serviceArguments[1]) || string.IsNullOrWhiteSpace(serviceArguments[2]) || !Path.IsPathFullyQualified(serviceArguments[4])) throw new ArgumentException("SCM migration request requires migration-once <operation-id> <pipe-name> --deployment <absolute path>.", nameof(serviceArguments));
+        return new ServiceMigrationOnceArguments(serviceArguments[1], serviceArguments[2], Path.GetFullPath(serviceArguments[4]));
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static void RunMigrationOnce(string serviceName, string operationId, string pipeName, DeploymentConfiguration deployment)
     {
         try
         {
-            string root = Environment.GetEnvironmentVariable("SCADA_DATABASE_ROOT") ?? AppContext.BaseDirectory;
-            ServiceIdentityPolicy policy = ServiceIdentityEnvironment.FromEnvironment();
-            if (string.Equals(serviceName, "WebScada", StringComparison.Ordinal)) WebServiceDatabaseStartup.MigrateOwnedDatabases(root, policy);
-            else if (string.Equals(serviceName, "RuntimeScada", StringComparison.Ordinal)) RuntimeServiceDatabaseStartup.MigrateOwnedDatabases(root, policy);
-            else throw new ArgumentException("Unknown owner service.", nameof(serviceName));
+            MigrateOwned(serviceName, deployment);
             SendResult(pipeName, operationId, "OK");
         }
         catch (Exception exception)
@@ -32,6 +47,14 @@ public static class ServiceHostRunner
             try { SendResult(pipeName, operationId, "ERROR: " + exception.GetType().Name); } catch { }
             throw;
         }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void MigrateOwned(string serviceName, DeploymentConfiguration deployment)
+    {
+        if (deployment.OwnerOf(serviceName) == ServiceIdentity.Web) WebServiceDatabaseStartup.MigrateOwnedDatabases(deployment.DatabaseRoot, deployment.CreateIdentityPolicy());
+        else if (deployment.OwnerOf(serviceName) == ServiceIdentity.Runtime) RuntimeServiceDatabaseStartup.MigrateOwnedDatabases(deployment.DatabaseRoot, deployment.CreateIdentityPolicy());
+        else throw new ArgumentException("Unknown owner service.", nameof(serviceName));
     }
 
     private static void SendResult(string pipeName, string operationId, string result)
@@ -43,14 +66,17 @@ public static class ServiceHostRunner
         writer.WriteLine(result);
     }
 
-    private sealed class NativeWindowsService
+    private sealed class NativeWindowsService : IDisposable
     {
         private readonly string _serviceName;
+        private readonly string _deploymentPath;
         private readonly HandlerEx _handler;
         private IntPtr _statusHandle;
+        private readonly ManualResetEventSlim _stop = new(false);
 
-        public NativeWindowsService(string serviceName) { _serviceName = serviceName; _handler = Handler; }
+        public NativeWindowsService(string serviceName, string deploymentPath) { _serviceName = serviceName; _deploymentPath = deploymentPath; _handler = Handler; }
 
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         public void Main(uint argc, IntPtr argv)
         {
             _statusHandle = RegisterServiceCtrlHandlerEx(_serviceName, _handler, IntPtr.Zero);
@@ -60,17 +86,29 @@ public static class ServiceHostRunner
             {
                 string[] args = ReadArguments(argc, argv);
                 if (args.Length > 0 && string.Equals(args[0], _serviceName, StringComparison.OrdinalIgnoreCase)) args = args[1..];
-                if (args.Length != 3 || !string.Equals(args[0], "migration-once", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("SCM service requires migration-once operationId pipeName arguments.");
+                if (args.Length > 0)
+                {
+                    ServiceMigrationOnceArguments migration = ParseMigrationOnceArguments(args);
+                    if (!string.Equals(migration.DeploymentPath, _deploymentPath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("SCM migration deployment path does not match the configured service deployment path.");
+                    RunMigrationOnce(_serviceName, migration.OperationId, migration.PipeName, DeploymentConfiguration.Load(_deploymentPath));
+                    Report(ServiceState.Stopped, 0, 0);
+                    return;
+                }
+                MigrateOwned(_serviceName, DeploymentConfiguration.Load(_deploymentPath));
                 Report(ServiceState.Running, 0, 0);
-                RunMigrationOnce(_serviceName, args[1], args[2]);
+                _stop.Wait();
                 Report(ServiceState.Stopped, 0, 0);
             }
-            catch { Report(ServiceState.Stopped, 0, 1); }
+            catch (Exception exception)
+            {
+                try { File.WriteAllText(StartupDiagnosticPath(_deploymentPath, _serviceName), ServiceStartupFailureDiagnostic.Format(exception) + Environment.NewLine, new UTF8Encoding(false)); } catch { }
+                Report(ServiceState.Stopped, 0, 1);
+            }
         }
 
         private uint Handler(uint control, uint eventType, IntPtr eventData, IntPtr context)
         {
-            if (control == 1) { Report(ServiceState.StopPending, 30_000, 0); Report(ServiceState.Stopped, 0, 0); }
+            if (control == 1) { Report(ServiceState.StopPending, 30_000, 0); _stop.Set(); }
             return 0;
         }
 
@@ -86,6 +124,8 @@ public static class ServiceHostRunner
             for (int i = 0; i < count; i++) result[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size)) ?? string.Empty;
             return result;
         }
+
+        public void Dispose() => _stop.Dispose();
     }
 
     private enum ServiceState : uint { Stopped = 1, StartPending = 2, StopPending = 3, Running = 4 }
@@ -96,4 +136,20 @@ public static class ServiceHostRunner
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool StartServiceCtrlDispatcher([In] SERVICE_TABLE_ENTRY[] table);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr RegisterServiceCtrlHandlerEx(string name, HandlerEx handler, IntPtr context);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool SetServiceStatus(IntPtr handle, ref SERVICE_STATUS status);
+}
+
+public sealed record ServiceMigrationOnceArguments(string OperationId, string PipeName, string DeploymentPath);
+
+public static class ServiceStartupFailureDiagnostic
+{
+    private const int MaximumLength = 512;
+
+    public static string Format(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = string.Concat(exception.Message.Select(character => char.IsControl(character) ? ' ' : character));
+        message = string.Join(' ', message.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        string diagnostic = exception.GetType().Name + ": " + message;
+        return diagnostic.Length <= MaximumLength ? diagnostic : diagnostic[..MaximumLength];
+    }
 }

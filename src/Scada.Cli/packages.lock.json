@@ -12,6 +12,9 @@
       "scada.contracts": {
         "type": "Project"
       },
+      "scada.deployment": {
+        "type": "Project"
+      },
       "scada.domain": {
         "type": "Project"
       }

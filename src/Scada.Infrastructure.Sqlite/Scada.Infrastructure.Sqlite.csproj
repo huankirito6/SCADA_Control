@@ -1,10 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <ItemGroup>
     <ProjectReference Include="../Scada.Application/Scada.Application.csproj" />
     <ProjectReference Include="../Scada.Domain/Scada.Domain.csproj" />
+    <ProjectReference Include="../Scada.Deployment/Scada.Deployment.csproj" />
   </ItemGroup>
-
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>

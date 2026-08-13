@@ -1,49 +1,22 @@
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
+using Scada.Deployment;
 
 namespace Scada.Infrastructure.Sqlite.Migrations;
 
 public enum DatabaseRole { Config, AuditWeb, HistorianCatalog, HistorianPartition, AuditRuntime, Alarms }
-public enum ServiceIdentity { Web, Runtime, Cli }
+
 public enum MigrationFaultPoint { BeforeStatement, AfterStatement, BeforeLedgerInsert, AfterLedgerInsert, BeforeCommit, AfterCommit }
 
-public interface IServiceIdentity { ServiceIdentity Identity { get; } }
 public interface IServiceStateProbe { bool AreAllOwnerServicesStopped(); }
 
 // Production hosts construct this from the current Windows access token and an ACL policy;
 // its constructor is internal so a process cannot make a public role/boolean authorization claim.
-public sealed class OsServiceIdentity : IServiceIdentity
-{
-    internal OsServiceIdentity(ServiceIdentity identity, string sid, bool enforceAccessControl) { Identity = identity; Sid = sid; EnforceAccessControl = enforceAccessControl; }
-    public ServiceIdentity Identity { get; }
-    public string Sid { get; }
-    internal bool EnforceAccessControl { get; }
-}
-
-public sealed class ServiceIdentityPolicy
-{
-    private readonly IReadOnlyDictionary<string, ServiceIdentity> _sidToIdentity;
-    private readonly bool _enforceAccessControl;
-    public ServiceIdentityPolicy(IReadOnlyDictionary<string, ServiceIdentity> sidToIdentity) : this(sidToIdentity, enforceAccessControl: true) { }
-    private ServiceIdentityPolicy(IReadOnlyDictionary<string, ServiceIdentity> sidToIdentity, bool enforceAccessControl) { _sidToIdentity = sidToIdentity; _enforceAccessControl = enforceAccessControl; }
-    public OsServiceIdentity ResolveCurrentProcess()
-    {
-        if (!OperatingSystem.IsWindows()) throw new DatabaseOwnershipException("Database owner identity verification is supported only on Windows release hosts.");
-        string sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? throw new DatabaseOwnershipException("Current process has no Windows SID.");
-        if (!_sidToIdentity.TryGetValue(sid, out ServiceIdentity identity)) throw new DatabaseOwnershipException($"Windows SID '{sid}' is not a configured database service identity.");
-        return new OsServiceIdentity(identity, sid, _enforceAccessControl);
-    }
-    [SupportedOSPlatform("windows")]
-    internal static ServiceIdentityPolicy ForTestCurrentProcess(ServiceIdentity identity)
-    {
-        string sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? throw new DatabaseOwnershipException("Current process has no Windows SID.");
-        return new ServiceIdentityPolicy(new Dictionary<string, ServiceIdentity>(StringComparer.OrdinalIgnoreCase) { [sid] = identity }, enforceAccessControl: false);
-    }
-    internal static OsServiceIdentity ForTest(ServiceIdentity identity) => new(identity, $"test-{identity}", enforceAccessControl: false);
-}
 
 public static class DatabaseOwnership
 {
@@ -60,19 +33,21 @@ internal static class WindowsDatabaseAccessPolicy
 {
     internal static void Apply(string databasePath, OsServiceIdentity identity)
     {
-        // Release hosts use a configured service SID. The parent ACL protects the DB,
-        // WAL/SHM files, and migration lock before SQLite opens any of them.
+        // Deployment creates the owner-scoped directory. Services verify, but do not need WRITE_DAC.
         if (!OperatingSystem.IsWindows() || !identity.EnforceAccessControl) return;
+        VerifyOwnerFullControl(databasePath, identity);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void VerifyOwnerFullControl(string databasePath, OsServiceIdentity identity)
+    {
         string directory = Path.GetDirectoryName(databasePath)!;
-        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "icacls",
-            Arguments = $"\"{directory}\" /inheritance:r /grant:r \"{identity.Sid}:(OI)(CI)F\" /grant:r \"*S-1-5-18:(OI)(CI)F\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        }) ?? throw new DatabaseOwnershipException("Unable to start icacls for database ACL enforcement.");
-        process.WaitForExit();
-        if (process.ExitCode != 0) throw new DatabaseOwnershipException("icacls failed to apply the database owner ACL.");
+        SecurityIdentifier owner = new(identity.Sid);
+        DirectorySecurity security = new DirectoryInfo(directory).GetAccessControl();
+        AuthorizationRuleCollection rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier));
+        bool hasOwnerFullControl = rules.OfType<FileSystemAccessRule>().Any(rule => rule.AccessControlType == AccessControlType.Allow && owner.Equals(rule.IdentityReference) && (rule.FileSystemRights & FileSystemRights.FullControl) == FileSystemRights.FullControl);
+        if (!hasOwnerFullControl) throw new DatabaseOwnershipException("Database owner directory is not provisioned with full owner access.");
+        if (WindowsAccessControlPolicy.GrantsUnexpectedMutation(security, WindowsAccessControlPolicy.DirectoryMutationRights, identity.Sid)) throw new DatabaseOwnershipException("Database owner directory grants mutation access to a non-owner identity.");
     }
 }
 

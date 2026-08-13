@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Scada.Deployment;
 using Scada.Infrastructure.Sqlite.Migrations;
 using Xunit;
 

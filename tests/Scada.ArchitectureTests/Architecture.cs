@@ -14,6 +14,7 @@ internal static class Architecture
         "Scada.Application",
         "Scada.Cli",
         "Scada.Contracts",
+        "Scada.Deployment",
         "Scada.Domain",
         "Scada.Drivers.Abstractions",
         "Scada.Drivers.ModbusRtu",
@@ -30,16 +31,17 @@ internal static class Architecture
         new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
             ["Scada.Application"] = ["Scada.Contracts", "Scada.Domain"],
-            ["Scada.Cli"] = ["Scada.Application", "Scada.Contracts"],
+            ["Scada.Cli"] = ["Scada.Application", "Scada.Contracts", "Scada.Deployment"],
             ["Scada.Contracts"] = [],
+            ["Scada.Deployment"] = [],
             ["Scada.Domain"] = [],
             ["Scada.Drivers.Abstractions"] = ["Scada.Domain"],
             ["Scada.Drivers.ModbusRtu"] = ["Scada.Drivers.Abstractions"],
             ["Scada.Drivers.ModbusTcp"] = ["Scada.Drivers.Abstractions"],
             ["Scada.Drivers.OpcUa"] = ["Scada.Drivers.Abstractions"],
             ["Scada.Drivers.Simulator"] = ["Scada.Drivers.Abstractions"],
-            ["Scada.Infrastructure.Sqlite"] = ["Scada.Application", "Scada.Domain"],
-            ["Scada.Hosting"] = ["Scada.Infrastructure.Sqlite"],
+            ["Scada.Infrastructure.Sqlite"] = ["Scada.Application", "Scada.Domain", "Scada.Deployment"],
+            ["Scada.Hosting"] = ["Scada.Infrastructure.Sqlite", "Scada.Deployment"],
             ["Scada.Runtime"] =
             [
                 "Scada.Hosting",
