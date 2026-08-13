@@ -124,7 +124,8 @@ public sealed class SceneCorpusTests
 
     [Fact]
     public void ServerCanonicalBytesAndHashAreCultureStableAndPreserveNumericMeaning()
-    {        var scene = LoadScene("valid-complex.json");
+    {
+        var scene = LoadScene("valid-complex.json");
         var canonicalizer = new SceneCanonicalizer();
         var originalCulture = CultureInfo.CurrentCulture;
         var originalUiCulture = CultureInfo.CurrentUICulture;
