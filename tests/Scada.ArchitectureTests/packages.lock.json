@@ -207,14 +207,13 @@
           "Scada.Drivers.ModbusTcp": "[1.0.0, )",
           "Scada.Drivers.OpcUa": "[1.0.0, )",
           "Scada.Drivers.Simulator": "[1.0.0, )",
+          "Scada.Hosting": "[1.0.0, )",
           "Scada.Infrastructure.Sqlite": "[1.0.0, )"
         }
       },
       "scada.web": {
         "type": "Project",
         "dependencies": {
-          "Scada.Application": "[1.0.0, )",
-          "Scada.Contracts": "[1.0.0, )",
           "Scada.Hosting": "[1.0.0, )"
         }
       },

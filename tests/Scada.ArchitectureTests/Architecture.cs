@@ -42,6 +42,7 @@ internal static class Architecture
             ["Scada.Hosting"] = ["Scada.Infrastructure.Sqlite"],
             ["Scada.Runtime"] =
             [
+                "Scada.Hosting",
                 "Scada.Application",
                 "Scada.Contracts",
                 "Scada.Drivers.Abstractions",
@@ -191,6 +192,37 @@ internal static class Architecture
                 $"NetArchTest successful: {netArchResult.IsSuccessful}{Environment.NewLine}" +
                 $"Compiled references: {FormatList(compiledViolations)}{Environment.NewLine}" +
                 $"Declared references: {FormatList(declaredViolations)}");
+        }
+    }
+
+    internal static void AssertNoDirectProjectOrSourceReferences(
+        string projectName,
+        string[] expectedProjectReferences,
+        string[] expectedPackageReferences,
+        params string[] forbiddenSourcePrefixes)
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        Dictionary<string, string> productProjects = FindProductProjects(repositoryRoot);
+        if (!productProjects.TryGetValue(projectName, out string? projectPath))
+        {
+            throw new XunitException($"Expected product project '{projectName}' to exist under src.");
+        }
+
+        AssertProjectDependencyGraph(projectPath, projectName, expectedProjectReferences, expectedPackageReferences);
+
+        string[] sourceViolations = Directory
+            .EnumerateFiles(Path.GetDirectoryName(projectPath)!, "*.cs", SearchOption.AllDirectories)
+            .SelectMany(path => File.ReadLines(path).Select((line, index) => (path, line, lineNumber: index + 1)))
+            .Where(entry => forbiddenSourcePrefixes.Any(prefix => entry.line.Contains(prefix, StringComparison.Ordinal)))
+            .Select(entry => $"{Path.GetRelativePath(repositoryRoot, entry.path)}:{entry.lineNumber}")
+            .ToArray();
+
+        if (sourceViolations.Length > 0)
+        {
+            throw new XunitException(
+                $"Project '{projectName}' has forbidden source dependencies." + Environment.NewLine +
+                $"Forbidden prefixes: {FormatList(forbiddenSourcePrefixes)}{Environment.NewLine}" +
+                $"Source references: {FormatList(sourceViolations)}");
         }
     }
 

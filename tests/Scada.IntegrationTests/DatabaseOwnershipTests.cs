@@ -63,7 +63,7 @@ public sealed class DatabaseOwnershipTests : IDisposable
     [Fact]
     public void OfflineCliRefusesRunningScmServiceBeforeRequestingOwnerMigration()
     {
-        RecordingRequester requester = new();
+        AcknowledgingRequester requester = new();
         OfflineMigrationCoordinator coordinator = new(new FixtureScm("WebScada", ServiceControlState.Running, "RuntimeScada", ServiceControlState.Stopped), requester);
 
         Assert.Throws<InvalidOperationException>(() => coordinator.RequestOwnerMigration());
@@ -73,13 +73,94 @@ public sealed class DatabaseOwnershipTests : IDisposable
     [Fact]
     public void OfflineCliRequestsBothOwnersOnlyAfterScmReportsStoppedAndNeverOpensDatabase()
     {
-        RecordingRequester requester = new();
+        AcknowledgingRequester requester = new();
         OfflineMigrationCoordinator coordinator = new(new FixtureScm("WebScada", ServiceControlState.Stopped, "RuntimeScada", ServiceControlState.Stopped), requester);
 
         coordinator.RequestOwnerMigration();
 
         Assert.Equal(["WebScada", "RuntimeScada"], requester.RequestedServices);
     }
+
+    [Fact]
+    public void OfflineCliRequiresAcknowledgedMigrationAndStoppedServicesBeforeReturning()
+    {
+        AcknowledgingRequester requester = new();
+        OfflineMigrationCoordinator coordinator = new(new FixtureScm("WebScada", ServiceControlState.Stopped, "RuntimeScada", ServiceControlState.Stopped), requester, TimeSpan.FromMilliseconds(50));
+
+        coordinator.RequestOwnerMigration();
+
+        Assert.Equal(["WebScada", "RuntimeScada"], requester.RequestedServices);
+        Assert.Equal(["WebScada", "RuntimeScada"], requester.AcknowledgedServices);
+    }
+
+    [Fact]
+    public void OfflineCliPreparesEachAcknowledgementBeforeStartingItsOwnerService()
+    {
+        OrderedAcknowledgingRequester requester = new();
+        OfflineMigrationCoordinator coordinator = new(new FixtureScm("WebScada", ServiceControlState.Stopped, "RuntimeScada", ServiceControlState.Stopped), requester);
+
+        coordinator.RequestOwnerMigration();
+
+        Assert.Equal(
+            ["prepare:WebScada", "request:WebScada", "wait:WebScada", "prepare:RuntimeScada", "request:RuntimeScada", "wait:RuntimeScada"],
+            requester.Calls);
+    }
+
+    [Fact]
+    public void OfflineCliWaitsForScmStoppedAfterEachSuccessfulAcknowledgement()
+    {
+        AcknowledgingRequester requester = new();
+        FixtureScm scm = new("WebScada", ServiceControlState.Stopped, "RuntimeScada", ServiceControlState.Stopped);
+        OfflineMigrationCoordinator coordinator = new(scm, requester);
+
+        coordinator.RequestOwnerMigration();
+
+        Assert.Equal(["WebScada", "RuntimeScada"], scm.WaitedForStopped);
+    }
+
+    [Fact]
+    public void OfflineCliFailsWhenScmDoesNotStopAfterSuccessfulAcknowledgement()
+    {
+        AcknowledgingRequester requester = new();
+        FixtureScm scm = new("WebScada", ServiceControlState.Stopped, "RuntimeScada", ServiceControlState.Stopped) { StopWaitResult = false };
+        OfflineMigrationCoordinator coordinator = new(scm, requester, TimeSpan.FromMilliseconds(10));
+
+        Assert.Throws<TimeoutException>(coordinator.RequestOwnerMigration);
+        Assert.Equal(["WebScada"], scm.WaitedForStopped);
+    }
+
+    [Fact]
+    public void OfflineCliFailsWhenOwnerDoesNotAcknowledgeBeforeBoundedTimeout()
+    {
+        OfflineMigrationCoordinator coordinator = new(new FixtureScm("WebScada", ServiceControlState.Stopped, "RuntimeScada", ServiceControlState.Stopped), new NeverAcknowledgingRequester(), TimeSpan.FromMilliseconds(10));
+
+        Assert.Throws<TimeoutException>(coordinator.RequestOwnerMigration);
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void AcknowledgementPipeRejectsMissingOwnerSidBeforeServiceStart()
+    {
+        using EnvironmentVariableScope web = new("SCADA_WEB_SERVICE_SID", null);
+        using WindowsServiceMigrationRequester requester = new();
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() => requester.PrepareMigration("WebScada"));
+
+        Assert.DoesNotContain("S-", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void AcknowledgementPipeRejectsInvalidOwnerSidBeforeServiceStart()
+    {
+        using EnvironmentVariableScope web = new("SCADA_WEB_SERVICE_SID", "not-a-sid");
+        using WindowsServiceMigrationRequester requester = new();
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() => requester.PrepareMigration("WebScada"));
+
+        Assert.DoesNotContain("not-a-sid", exception.Message, StringComparison.Ordinal);
+    }
+
 
     [Theory]
     [InlineData(DatabaseRole.Config)]
@@ -114,8 +195,48 @@ public sealed class DatabaseOwnershipTests : IDisposable
     private sealed class FixtureScm(params object[] states) : IServiceControlManager
     {
         private readonly Dictionary<string, ServiceControlState> _states = states.Chunk(2).ToDictionary(pair => (string)pair[0], pair => (ServiceControlState)pair[1], StringComparer.Ordinal);
+        public List<string> WaitedForStopped { get; } = [];
+        public bool StopWaitResult { get; init; } = true;
         public ServiceControlState GetState(string serviceName) => _states[serviceName];
+        public bool WaitForStopped(string serviceName, TimeSpan timeout)
+        {
+            WaitedForStopped.Add(serviceName);
+            return StopWaitResult && GetState(serviceName) == ServiceControlState.Stopped;
+        }
     }
     private sealed class RecordingRequester : IServiceMigrationRequester { public List<string> RequestedServices { get; } = []; public void RequestMigration(string serviceName) => RequestedServices.Add(serviceName); }
+    private sealed class AcknowledgingRequester : IAcknowledgingServiceMigrationRequester
+    {
+        public List<string> RequestedServices { get; } = [];
+        public List<string> AcknowledgedServices { get; } = [];
+        public void PrepareMigration(string serviceName) { }
+        public void RequestMigration(string serviceName) => RequestedServices.Add(serviceName);
+        public bool WaitForMigration(string serviceName, TimeSpan timeout) { AcknowledgedServices.Add(serviceName); return true; }
+    }
+    private sealed class NeverAcknowledgingRequester : IAcknowledgingServiceMigrationRequester
+    {
+        public void PrepareMigration(string serviceName) { }
+        public void RequestMigration(string serviceName) { }
+        public bool WaitForMigration(string serviceName, TimeSpan timeout) => false;
+    }
+    private sealed class OrderedAcknowledgingRequester : IAcknowledgingServiceMigrationRequester
+    {
+        public List<string> Calls { get; } = [];
+        public void PrepareMigration(string serviceName) => Calls.Add($"prepare:{serviceName}");
+        public void RequestMigration(string serviceName) => Calls.Add($"request:{serviceName}");
+        public bool WaitForMigration(string serviceName, TimeSpan timeout) { Calls.Add($"wait:{serviceName}"); return true; }
+    }
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _previous;
+        public EnvironmentVariableScope(string name, string? value)
+        {
+            _name = name;
+            _previous = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+        public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
+    }
     private sealed class TemporaryDatabaseRoot(string path) : IDisposable { public string Path { get; } = path; public string DatabasePath(string name) => System.IO.Path.Combine(Path, name); public void Dispose() { } }
 }

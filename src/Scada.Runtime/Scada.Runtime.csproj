@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Scada.Hosting/Scada.Hosting.csproj" />
     <ProjectReference Include="../Scada.Application/Scada.Application.csproj" />
     <ProjectReference Include="../Scada.Contracts/Scada.Contracts.csproj" />
     <ProjectReference Include="../Scada.Infrastructure.Sqlite/Scada.Infrastructure.Sqlite.csproj" />

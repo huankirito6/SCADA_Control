@@ -71,6 +71,12 @@
           "Scada.Drivers.Abstractions": "[1.0.0, )"
         }
       },
+      "scada.hosting": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Infrastructure.Sqlite": "[1.0.0, )"
+        }
+      },
       "scada.infrastructure.sqlite": {
         "type": "Project",
         "dependencies": {

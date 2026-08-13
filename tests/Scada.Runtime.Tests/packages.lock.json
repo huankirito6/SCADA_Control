@@ -162,6 +162,12 @@
           "Scada.Drivers.Abstractions": "[1.0.0, )"
         }
       },
+      "scada.hosting": {
+        "type": "Project",
+        "dependencies": {
+          "Scada.Infrastructure.Sqlite": "[1.0.0, )"
+        }
+      },
       "scada.infrastructure.sqlite": {
         "type": "Project",
         "dependencies": {
@@ -180,6 +186,7 @@
           "Scada.Drivers.ModbusTcp": "[1.0.0, )",
           "Scada.Drivers.OpcUa": "[1.0.0, )",
           "Scada.Drivers.Simulator": "[1.0.0, )",
+          "Scada.Hosting": "[1.0.0, )",
           "Scada.Infrastructure.Sqlite": "[1.0.0, )"
         }
       },

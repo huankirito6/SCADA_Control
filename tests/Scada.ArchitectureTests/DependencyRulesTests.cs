@@ -61,9 +61,19 @@ public sealed class DependencyRulesTests
     }
 
     [Fact]
-    public void WebCannotReferenceDriversRuntimeOrSqlite()
-        => Architecture.AssertNoReferences(
+    public void WebDirectProjectAndPackageReferencesAreOnlyHosting()
+        => Architecture.AssertProjectDependencyGraph(
+            Path.Combine(Architecture.FindRepositoryRoot(), "src", "Scada.Web", "Scada.Web.csproj"),
             "Scada.Web",
+            ["Scada.Hosting"],
+            []);
+
+    [Fact]
+    public void WebSourceCannotReferenceDriversRuntimeOrSqlite()
+        => Architecture.AssertNoDirectProjectOrSourceReferences(
+            "Scada.Web",
+            ["Scada.Hosting"],
+            [],
             "Scada.Runtime",
             "Scada.Drivers",
             "Scada.Infrastructure.Sqlite",
